@@ -63,6 +63,22 @@ let countdownTimer = null;
 let inFlightFetch = null;
 let conversationDiagnostics = new Map();
 
+function uiLanguage() {
+    return window.UsageI18n?.language === 'en' ? 'en' : 'vi';
+}
+
+function uiLocale() {
+    return uiLanguage() === 'en' ? 'en-US' : 'vi-VN';
+}
+
+function tr(value) {
+    return window.UsageI18n?.t ? window.UsageI18n.t(value) : String(value ?? '');
+}
+
+function uiText(vi, en) {
+    return uiLanguage() === 'en' ? en : vi;
+}
+
 // Color Palette Constants
 const THEME = {
     indigo: '#6366f1',
@@ -81,7 +97,7 @@ function formatNumber(num) {
     if (num === null || num === undefined) return '0';
     if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
     if (num >= 1_000) return (num / 1_000).toFixed(1) + 'K';
-    return num.toLocaleString();
+    return num.toLocaleString(uiLocale());
 }
 
 function formatBytes(bytes) {
@@ -92,20 +108,20 @@ function formatBytes(bytes) {
 }
 
 function formatDuration(minutes) {
-    if (!minutes || minutes <= 0) return '< 1p';
+    if (!minutes || minutes <= 0) return uiLanguage() === 'en' ? '< 1 min' : '< 1p';
     const roundedMinutes = Math.round(minutes);
-    if (roundedMinutes < 60) return roundedMinutes + ' phút';
+    if (roundedMinutes < 60) return uiLanguage() === 'en' ? `${roundedMinutes} min` : `${roundedMinutes} phút`;
     const h = Math.floor(roundedMinutes / 60);
     const m = roundedMinutes % 60;
-    return `${h}h ${m}p`;
+    return uiLanguage() === 'en' ? `${h}h ${m}m` : `${h}h ${m}p`;
 }
 
 function formatDate(isoStr) {
     if (!isoStr) return '—';
     try {
         const d = new Date(isoStr);
-        return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
-            + ' ' + d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return d.toLocaleDateString(uiLocale(), { day: '2-digit', month: '2-digit', year: 'numeric' })
+            + ' ' + d.toLocaleTimeString(uiLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     } catch { return isoStr.slice(0, 19); }
 }
 
@@ -117,7 +133,8 @@ function escapeHtml(str) {
 function showToast(msg, isError = false) {
     const toast = document.getElementById('toast');
     if (!toast) return;
-    toast.innerHTML = isError ? `⚠️ ${msg}` : `⚡ ${msg}`;
+    const translated = tr(msg);
+    toast.innerHTML = isError ? `⚠️ ${translated}` : `⚡ ${translated}`;
     toast.style.borderColor = isError ? 'var(--rose-500)' : 'var(--border-accent)';
     toast.classList.add('show');
     setTimeout(() => {
@@ -402,7 +419,7 @@ class CanvasCharts {
             ctx.fillStyle = '#f43f5e';
             ctx.font = '600 10px "JetBrains Mono", monospace';
             ctx.textAlign = 'left';
-            ctx.fillText(`Hạn Mức (${formatNumber(options.limit)})`, pad.left + 8, limitY - 8);
+            ctx.fillText(uiText(`Hạn Mức (${formatNumber(options.limit)})`, `Limit (${formatNumber(options.limit)})`), pad.left + 8, limitY - 8);
             ctx.restore();
         }
 
@@ -626,7 +643,7 @@ class CanvasCharts {
             ctx.fillStyle = '#f59e0b';
             ctx.font = '600 10px "JetBrains Mono", monospace';
             ctx.textAlign = 'left';
-            ctx.fillText(`Hạn Mức Tuần (${formatNumber(options.limit)})`, pad.left + 8, limitY - 8);
+            ctx.fillText(uiText(`Hạn Mức Tuần (${formatNumber(options.limit)})`, `Weekly Limit (${formatNumber(options.limit)})`), pad.left + 8, limitY - 8);
             ctx.restore();
         }
 
@@ -836,7 +853,7 @@ async function doFetchData(isManual = false) {
                 data = await resp.json();
                 const badge = document.getElementById('data-source-badge');
                 if (badge) {
-                    badge.textContent = 'API Trực Tiếp (Live Server)';
+                    badge.textContent = uiText('API Trực Tiếp (Live Server)', 'Direct API (Live Server)');
                     badge.className = 'status-value highlight-cyan';
                 }
             }
@@ -852,18 +869,21 @@ async function doFetchData(isManual = false) {
         }
 
         if (!data || !data.summary) {
-            throw new Error('Không thể tải dữ liệu phân tích usage.');
+            throw new Error(uiText('Không thể tải dữ liệu phân tích usage.', 'Could not load usage analytics data.'));
         }
 
         currentData = data;
         renderAll(currentData);
 
-        const updateTime = new Date().toLocaleTimeString('vi-VN');
+        const updateTime = new Date().toLocaleTimeString(uiLocale());
         const lastUpdated = document.getElementById('last-updated-time');
         if (lastUpdated) lastUpdated.textContent = updateTime;
 
         if (isManual) {
-            showToast(`Đã đồng bộ thành công lúc ${updateTime}! (${data.summary.total_conversations} phiên chat)`);
+            showToast(uiText(
+                `Đã đồng bộ thành công lúc ${updateTime}! (${data.summary.total_conversations} phiên chat)`,
+                `Synced successfully at ${updateTime}! (${data.summary.total_conversations} chat sessions)`,
+            ));
         }
         return currentData;
     } catch (err) {
@@ -959,12 +979,15 @@ function renderTimeSeriesAnalytics(tsData) {
     if (canvas5h && fiveH && fiveH.labels) {
         const datasets5h = [
             { label: 'Gemini (5h)', data: fiveH.gemini_tokens || [], color: THEME.cyan },
-            { label: 'Model Ngoài (5h)', data: fiveH.external_tokens || [], color: THEME.amber }
+            { label: uiText('Model Ngoài (5h)', 'External Models (5h)'), data: fiveH.external_tokens || [], color: THEME.amber }
         ];
         CanvasCharts.drawAreaSpline(canvas5h, fiveH.labels, datasets5h, { limit: fiveH.gemini_limit });
 
         const badgeUsed5h = document.getElementById('ts-5h-used-badge');
-        if (badgeUsed5h) badgeUsed5h.textContent = `${formatNumber(fiveH.current_used_5h || 0)} tokens (${(fiveH.current_pct_5h || 100).toFixed(1)}% còn lại)`;
+        if (badgeUsed5h) badgeUsed5h.textContent = uiText(
+            `${formatNumber(fiveH.current_used_5h || 0)} tokens (${(fiveH.current_pct_5h || 100).toFixed(1)}% còn lại)`,
+            `${formatNumber(fiveH.current_used_5h || 0)} tokens (${(fiveH.current_pct_5h || 100).toFixed(1)}% remaining)`,
+        );
     }
 
     // 2. Render Weekly Timeline Chart
@@ -972,12 +995,15 @@ function renderTimeSeriesAnalytics(tsData) {
     if (canvasWk && weekly && weekly.labels) {
         const datasetsWk = [
             { label: 'Gemini', data: weekly.daily_gemini_tokens || [], color: THEME.cyan },
-            { label: 'Model Ngoài', data: weekly.daily_external_tokens || [], color: THEME.amber }
+            { label: uiText('Model Ngoài', 'External Models'), data: weekly.daily_external_tokens || [], color: THEME.amber }
         ];
         CanvasCharts.drawWeeklyTimeline(canvasWk, weekly.labels, datasetsWk, { limit: weekly.gemini_limit });
 
         const badgeUsedWk = document.getElementById('ts-wk-used-badge');
-        if (badgeUsedWk) badgeUsedWk.textContent = `${formatNumber(weekly.current_used_weekly || 0)} tokens (${(weekly.current_pct_weekly || 100).toFixed(1)}% còn lại)`;
+        if (badgeUsedWk) badgeUsedWk.textContent = uiText(
+            `${formatNumber(weekly.current_used_weekly || 0)} tokens (${(weekly.current_pct_weekly || 100).toFixed(1)}% còn lại)`,
+            `${formatNumber(weekly.current_used_weekly || 0)} tokens (${(weekly.current_pct_weekly || 100).toFixed(1)}% remaining)`,
+        );
     }
 
     // 3. Render Capacity Evolution Chart
@@ -1011,7 +1037,10 @@ function renderTimeSeriesAnalytics(tsData) {
             const shiftText = latestShift ? ` · ⚠ ${latestShift.bucket}: ${latestShift.old_capacity?.toLocaleString?.() || latestShift.old_capacity} → ${latestShift.new_capacity?.toLocaleString?.() || latestShift.new_capacity} (${latestShift.change_pct})` : '';
             evidenceNote.textContent = `Evidence: ${latest5h.evidence_count || 0} observations / ${latest5h.pair_count || 0} pairs · confidence ${conf} · ${latest5h.accepted ? 'accepted' : 'prior retained'} (${latest5h.reason || 'no new evidence'})${recentText}${shiftText}`;
         } else if (evidenceNote) {
-            evidenceNote.textContent = 'Chưa có điểm hiệu chỉnh mới; biểu đồ đang hiển thị lịch sử/prior hiện có.';
+            evidenceNote.textContent = uiText(
+                'Chưa có điểm hiệu chỉnh mới; biểu đồ đang hiển thị lịch sử/prior hiện có.',
+                'No new calibration point is available; the chart is showing the existing history/prior.',
+            );
         }
     }
     if (canvasCapWeekly && capEvo && capEvo.weekly && capEvo.weekly.labels?.length > 0) {
@@ -1024,7 +1053,10 @@ function renderTimeSeriesAnalytics(tsData) {
         ].filter(dataset => dataset.data);
         CanvasCharts.drawAreaSpline(canvasCapWeekly, weekly.labels, weeklyDatasets, { limit: weekly.current_capacity });
         const badgeWeekly = document.getElementById('ts-cap-weekly-badge');
-        if (badgeWeekly) badgeWeekly.textContent = `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed phụ thuộc source mix`;
+        if (badgeWeekly) badgeWeekly.textContent = uiText(
+            `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed phụ thuộc source mix`,
+            `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed evidence depends on source mix`,
+        );
     }
 
     // 4. Render Policy Shifts & Empirical Audit Table Body
@@ -1032,17 +1064,17 @@ function renderTimeSeriesAnalytics(tsData) {
     const shifts = policyShifts;
     if (tbodyShifts) {
         if (shifts.length === 0) {
-            tbodyShifts.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px;">Chưa phát hiện biến động hạn mức bất thường nào.</td></tr>';
+            tbodyShifts.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px;">${uiText('Chưa phát hiện biến động hạn mức bất thường nào.', 'No unusual quota change has been detected.')}</td></tr>`;
         } else {
             tbodyShifts.innerHTML = shifts.map(s => {
                 let badgeType = 'badge-emerald';
-                let tagText = '● Chuẩn Cơ Sở';
+                let tagText = uiText('● Chuẩn Cơ Sở', '● Baseline');
                 if (s.type === 'INCREASE') {
                     badgeType = 'badge-cyan';
-                    tagText = '▲ Tăng Hạn Mức';
+                    tagText = uiText('▲ Tăng Hạn Mức', '▲ Quota Increase');
                 } else if (s.type === 'DECREASE') {
                     badgeType = 'badge-rose';
-                    tagText = '▼ Siết Hạn Mức';
+                    tagText = uiText('▼ Siết Hạn Mức', '▼ Quota Decrease');
                 }
 
                 return `
@@ -1052,7 +1084,7 @@ function renderTimeSeriesAnalytics(tsData) {
                         <td style="font-family:'JetBrains Mono';font-size:0.8rem;">${escapeHtml(s.bucket || 'Gemini 5H')}</td>
                         <td><span class="badge-tag ${badgeType}" style="font-weight:700;">${tagText} (${s.change_pct || '0%'})</span></td>
                         <td style="font-family:'JetBrains Mono';font-weight:600;">${formatNumber(s.old_capacity)} → <strong style="color:var(--cyan-400);">${formatNumber(s.new_capacity)}</strong></td>
-                        <td style="font-size:0.78rem;color:var(--text-secondary);max-width:280px;">${escapeHtml(s.note || 'Bằng chứng thực nghiệm ghi nhận từ hệ thống.')}</td>
+                        <td style="font-size:0.78rem;color:var(--text-secondary);max-width:280px;">${escapeHtml(s.note || uiText('Bằng chứng thực nghiệm ghi nhận từ hệ thống.', 'Empirical evidence recorded by the tracker.'))}</td>
                     </tr>
                 `;
             }).join('');
@@ -1063,7 +1095,7 @@ function renderTimeSeriesAnalytics(tsData) {
     const tbody = document.getElementById('ts-snapshots-table-body');
     if (tbody) {
         if (snapshots.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">Chưa có điểm đo snapshot nào được ghi nhận.</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">${uiText('Chưa có điểm đo snapshot nào được ghi nhận.', 'No snapshot measurements have been recorded yet.')}</td></tr>`;
         } else {
             const rows = [...snapshots].reverse().slice(0, 30);
             tbody.innerHTML = rows.map(s => {
@@ -1137,7 +1169,7 @@ function buildConversationDiagnostics(conversations) {
 
     conversations.forEach(conversation => {
         const source = conversation.source || 'unknown';
-        const model = conversation.model_name || 'Mặc định';
+        const model = conversation.model_name || uiText('Mặc định', 'Default');
         const groupKey = `${source}:${model}`;
         if (!byModelAndSource.has(groupKey)) byModelAndSource.set(groupKey, []);
         if (!bySource.has(source)) bySource.set(source, []);
@@ -1145,21 +1177,21 @@ function buildConversationDiagnostics(conversations) {
         bySource.get(source).push(conversation);
     });
 
-    const allBaseline = buildConversationBaseline(conversations, 'toàn bộ phiên');
+    const allBaseline = buildConversationBaseline(conversations, uiText('toàn bộ phiên', 'all sessions'));
     const diagnostics = new Map();
 
     conversations.forEach(conversation => {
         const source = conversation.source || 'unknown';
-        const model = conversation.model_name || 'Mặc định';
+        const model = conversation.model_name || uiText('Mặc định', 'Default');
         const exactGroup = byModelAndSource.get(`${source}:${model}`) || [];
         const sourceGroup = bySource.get(source) || [];
         let baseline;
         let baselineLevel;
         if (exactGroup.length >= 3) {
-            baseline = buildConversationBaseline(exactGroup, `cùng nguồn + model (${model})`);
+            baseline = buildConversationBaseline(exactGroup, uiText(`cùng nguồn + model (${model})`, `same source + model (${model})`));
             baselineLevel = 'model';
         } else if (sourceGroup.length >= 3) {
-            baseline = buildConversationBaseline(sourceGroup, `cùng nguồn (${conversation.source_label || source})`);
+            baseline = buildConversationBaseline(sourceGroup, uiText(`cùng nguồn (${conversation.source_label || source})`, `same source (${conversation.source_label || source})`));
             baselineLevel = 'source';
         } else {
             baseline = allBaseline;
@@ -1183,14 +1215,14 @@ function buildConversationDiagnostics(conversations) {
             tools: safeRatio(values.tools, baseline.tools)
         };
         const flags = [];
-        if (ratios.tokens >= 2 && values.tokens >= 5000) flags.push({ key: 'TOKENS', label: 'Token cao', level: 'warning', ratio: ratios.tokens });
-        if (ratios.cost >= 2 && values.cost >= 0.005) flags.push({ key: 'COST', label: 'Chi phí cao', level: 'warning', ratio: ratios.cost });
-        if (durationExcluded) flags.push({ key: 'DURATION', label: 'Có khoảng nghỉ dài', level: 'info', ratio: 0 });
-        else if (ratios.duration >= 2 && values.duration >= 5) flags.push({ key: 'DURATION', label: 'Chạy lâu', level: 'info', ratio: ratios.duration });
-        if (ratios.tools >= 2 && values.tools >= 5) flags.push({ key: 'TOOLS', label: 'Nhiều tools', level: 'info', ratio: ratios.tools });
-        if (Number(conversation.errors || 0) > 0) flags.push({ key: 'ERRORS', label: `${conversation.errors} lỗi`, level: 'critical', ratio: 0 });
+        if (ratios.tokens >= 2 && values.tokens >= 5000) flags.push({ key: 'TOKENS', label: uiText('Token cao', 'High token use'), level: 'warning', ratio: ratios.tokens });
+        if (ratios.cost >= 2 && values.cost >= 0.005) flags.push({ key: 'COST', label: uiText('Chi phí cao', 'High cost'), level: 'warning', ratio: ratios.cost });
+        if (durationExcluded) flags.push({ key: 'DURATION', label: uiText('Có khoảng nghỉ dài', 'Long idle gap'), level: 'info', ratio: 0 });
+        else if (ratios.duration >= 2 && values.duration >= 5) flags.push({ key: 'DURATION', label: uiText('Chạy lâu', 'Long runtime'), level: 'info', ratio: ratios.duration });
+        if (ratios.tools >= 2 && values.tools >= 5) flags.push({ key: 'TOOLS', label: uiText('Nhiều tools', 'Many tool calls'), level: 'info', ratio: ratios.tools });
+        if (Number(conversation.errors || 0) > 0) flags.push({ key: 'ERRORS', label: uiText(`${conversation.errors} lỗi`, `${conversation.errors} errors`), level: 'critical', ratio: 0 });
         if (Array.isArray(conversation.models_used) && conversation.models_used.length > 1) {
-            flags.push({ key: 'MODEL_SWITCH', label: 'Đổi model', level: 'critical', ratio: 0 });
+            flags.push({ key: 'MODEL_SWITCH', label: uiText('Đổi model', 'Model switch'), level: 'critical', ratio: 0 });
         }
 
         const maxRatio = Math.max(ratios.tokens, ratios.cost, ratios.duration, ratios.tools, 0);
@@ -1218,7 +1250,7 @@ function buildConversationDiagnostics(conversations) {
 
 function renderSignalBadges(diagnostic, limit = 3) {
     if (!diagnostic || diagnostic.flags.length === 0) {
-        return '<span class="signal-badge signal-normal">Bình thường</span>';
+        return `<span class="signal-badge signal-normal">${uiText('Bình thường', 'Normal')}</span>`;
     }
     const visible = diagnostic.flags.slice(0, limit);
     const badges = visible.map(flag => `<span class="signal-badge signal-${flag.level}">${escapeHtml(flag.label)}</span>`);
@@ -1234,21 +1266,23 @@ function formatDiagnosticRatio(ratio) {
 
 function renderDiagnosticComparison(diagnostic) {
     if (!diagnostic) return '';
-    const statusTitle = diagnostic.requiresReview ? 'Tín hiệu cần kiểm tra' : 'Chưa thấy bất thường đáng kể';
+    const statusTitle = diagnostic.requiresReview
+        ? uiText('Tín hiệu cần kiểm tra', 'Signal needs review')
+        : uiText('Chưa thấy bất thường đáng kể', 'No material anomaly detected');
     return `
         <div class="diagnostic-panel ${diagnostic.requiresReview ? 'needs-review' : 'is-normal'}">
             <div class="diagnostic-panel-header">
                 <div>
                     <strong>${statusTitle}</strong>
-                    <div class="diagnostic-baseline">So với trung vị ${escapeHtml(diagnostic.baseline.label)}, ${diagnostic.baseline.sampleCount} phiên mẫu.</div>
+                    <div class="diagnostic-baseline">${uiText(`So với trung vị ${escapeHtml(diagnostic.baseline.label)}, ${diagnostic.baseline.sampleCount} phiên mẫu.`, `Compared with the median for ${escapeHtml(diagnostic.baseline.label)}, based on ${diagnostic.baseline.sampleCount} sample sessions.`)}</div>
                 </div>
                 ${renderSignalBadges(diagnostic, 5)}
             </div>
             <div class="diagnostic-comparison-grid">
-                <div><span>Tokens</span><strong>${formatDiagnosticRatio(diagnostic.ratios.tokens)}</strong><small>Chuẩn ${formatNumber(diagnostic.baseline.tokens)}</small></div>
-                <div><span>Chi phí</span><strong>${formatDiagnosticRatio(diagnostic.ratios.cost)}</strong><small>Chuẩn $${diagnostic.baseline.cost.toFixed(4)}</small></div>
-                <div><span>Thời lượng lịch</span><strong>${diagnostic.durationExcluded ? 'Loại khỏi so sánh' : formatDiagnosticRatio(diagnostic.ratios.duration)}</strong><small>${diagnostic.durationExcluded ? 'Trên 6h, có thể gồm thời gian nghỉ' : `Chuẩn ${formatDuration(diagnostic.baseline.duration)}`}</small></div>
-                <div><span>Tool calls</span><strong>${formatDiagnosticRatio(diagnostic.ratios.tools)}</strong><small>Chuẩn ${formatNumber(diagnostic.baseline.tools)}</small></div>
+                <div><span>Tokens</span><strong>${formatDiagnosticRatio(diagnostic.ratios.tokens)}</strong><small>${uiText('Chuẩn', 'Baseline')} ${formatNumber(diagnostic.baseline.tokens)}</small></div>
+                <div><span>${uiText('Chi phí', 'Cost')}</span><strong>${formatDiagnosticRatio(diagnostic.ratios.cost)}</strong><small>${uiText('Chuẩn', 'Baseline')} $${diagnostic.baseline.cost.toFixed(4)}</small></div>
+                <div><span>${uiText('Thời lượng lịch', 'Wall-clock duration')}</span><strong>${diagnostic.durationExcluded ? uiText('Loại khỏi so sánh', 'Excluded from comparison') : formatDiagnosticRatio(diagnostic.ratios.duration)}</strong><small>${diagnostic.durationExcluded ? uiText('Trên 6h, có thể gồm thời gian nghỉ', 'Over 6h; may include idle time') : `${uiText('Chuẩn', 'Baseline')} ${formatDuration(diagnostic.baseline.duration)}`}</small></div>
+                <div><span>Tool calls</span><strong>${formatDiagnosticRatio(diagnostic.ratios.tools)}</strong><small>${uiText('Chuẩn', 'Baseline')} ${formatNumber(diagnostic.baseline.tools)}</small></div>
             </div>
         </div>
     `;
@@ -1268,26 +1302,28 @@ function renderInvestigationDashboard(conversations) {
         {
             icon: '⚠', cls: 'rose', cardCls: 'c-rose',
             val: formatNumber(candidates.length),
-            label: 'Phiên Cần Kiểm Tra',
-            sub: `Trong ${formatNumber(conversations.length)} phiên đã ghi nhận`
+            label: uiText('Phiên Cần Kiểm Tra', 'Sessions To Review'),
+            sub: uiText(`Trong ${formatNumber(conversations.length)} phiên đã ghi nhận`, `Out of ${formatNumber(conversations.length)} recorded sessions`)
         },
         {
             icon: '✕', cls: 'amber', cardCls: 'c-amber',
             val: formatNumber(errorCount),
-            label: 'Phiên Có Lỗi',
-            sub: 'Ưu tiên xem lại transcript và lần retry'
+            label: uiText('Phiên Có Lỗi', 'Sessions With Errors'),
+            sub: uiText('Ưu tiên xem lại transcript và lần retry', 'Prioritize transcript and retry review')
         },
         {
             icon: '⇄', cls: 'purple', cardCls: 'c-purple',
             val: formatNumber(modelSwitchCount),
-            label: 'Phiên Đổi Model',
-            sub: 'Có thể làm sai lệch so sánh chi phí và quota'
+            label: uiText('Phiên Đổi Model', 'Model-Switch Sessions'),
+            sub: uiText('Có thể làm sai lệch so sánh chi phí và quota', 'Can distort cost and quota comparisons')
         },
         {
             icon: '↗', cls: 'cyan', cardCls: 'c-cyan',
             val: highest && highest.maxRatio > 0 ? `${highest.maxRatio.toFixed(1)}×` : '—',
-            label: 'Mức Lệch Cao Nhất',
-            sub: highest ? `Phiên ${escapeHtml(highest.conversation.short_id || highest.conversation.id || '')}` : 'Chưa có tín hiệu bất thường'
+            label: uiText('Mức Lệch Cao Nhất', 'Largest Deviation'),
+            sub: highest
+                ? uiText(`Phiên ${escapeHtml(highest.conversation.short_id || highest.conversation.id || '')}`, `Session ${escapeHtml(highest.conversation.short_id || highest.conversation.id || '')}`)
+                : uiText('Chưa có tín hiệu bất thường', 'No anomaly signal yet')
         }
     ];
 
@@ -1304,10 +1340,13 @@ function renderInvestigationDashboard(conversations) {
     }
 
     const badge = document.getElementById('anomaly-count-badge');
-    if (badge) badge.textContent = `${formatNumber(candidates.length)} phiên`;
+    if (badge) badge.textContent = uiText(`${formatNumber(candidates.length)} phiên`, `${formatNumber(candidates.length)} sessions`);
     const note = document.getElementById('anomaly-baseline-note');
     if (note) {
-        note.textContent = 'Mốc chuẩn là trung vị của cùng nguồn + model khi có từ 3 phiên. Thời lượng lịch trên 6h vẫn được báo nhưng không dùng để tính mức lệch vì có thể chứa thời gian nghỉ.';
+        note.textContent = uiText(
+            'Mốc chuẩn là trung vị của cùng nguồn + model khi có từ 3 phiên. Thời lượng lịch trên 6h vẫn được báo nhưng không dùng để tính mức lệch vì có thể chứa thời gian nghỉ.',
+            'The baseline is the median for the same source + model when at least 3 sessions exist. Wall-clock durations over 6 hours are still shown but excluded from deviation scoring because they may include idle time.',
+        );
     }
     renderAnomalyTable(candidates);
 }
@@ -1316,7 +1355,7 @@ function renderAnomalyTable(candidates) {
     const tbody = document.getElementById('anomaly-tbody');
     if (!tbody) return;
     if (!candidates || candidates.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="investigation-empty">Chưa phát hiện phiên nào vượt ngưỡng cần kiểm tra.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="10" class="investigation-empty">${uiText('Chưa phát hiện phiên nào vượt ngưỡng cần kiểm tra.', 'No session currently exceeds the review threshold.')}</td></tr>`;
         return;
     }
 
@@ -1326,7 +1365,7 @@ function renderAnomalyTable(candidates) {
         return `
             <tr class="investigation-row" onclick="inspectConversation('${escapeHtml(conversation.id)}', '${escapeHtml(sourceKey)}')">
                 <td><span class="conv-id-badge">${escapeHtml(conversation.short_id || conversation.id)}</span></td>
-                <td><span class="model-pill">${escapeHtml(conversation.model_name || 'Mặc định')}</span></td>
+                <td><span class="model-pill">${escapeHtml(conversation.model_name || uiText('Mặc định', 'Default'))}</span></td>
                 <td>${renderSignalBadges(item, 3)}</td>
                 <td class="num"><span class="anomaly-ratio">${item.maxRatio > 0 ? `${item.maxRatio.toFixed(1)}×` : '—'}</span></td>
                 <td class="num">${formatNumber(item.values.tokens)}</td>
@@ -1334,7 +1373,7 @@ function renderAnomalyTable(candidates) {
                 <td class="num">${formatDuration(item.values.duration)}</td>
                 <td class="num">${formatNumber(item.values.tools)}</td>
                 <td><span class="investigation-date">${formatDate(conversation.start_time)}</span></td>
-                <td class="action-col"><button class="btn-inspect" onclick="event.stopPropagation();inspectConversation('${escapeHtml(conversation.id)}', '${escapeHtml(sourceKey)}')">Điều tra</button></td>
+                <td class="action-col"><button class="btn-inspect" onclick="event.stopPropagation();inspectConversation('${escapeHtml(conversation.id)}', '${escapeHtml(sourceKey)}')">${uiText('Điều tra', 'Inspect')}</button></td>
             </tr>
         `;
     }).join('');
@@ -1347,7 +1386,7 @@ function populateModelFilter(modelsDist) {
         : (typeof uiPreferences.investigationModelFilter === 'string' ? uiPreferences.investigationModelFilter : 'ALL');
     const models = Object.keys(modelsDist);
 
-    select.innerHTML = '<option value="ALL">Tất cả Models</option>' +
+    select.innerHTML = `<option value="ALL">${uiText('Tất cả Models', 'All Models')}</option>` +
         models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)} (${modelsDist[m]})</option>`).join('');
 
     select.value = models.includes(curVal) ? curVal : 'ALL';
@@ -1414,7 +1453,7 @@ function renderConversationTable(conversations) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="14" style="text-align:center;padding:32px;color:var(--text-muted);">
-                    Không tìm thấy phiên làm việc nào phù hợp với bộ lọc.
+                    ${uiText('Không tìm thấy phiên làm việc nào phù hợp với bộ lọc.', 'No work sessions match the current filters.')}
                 </td>
             </tr>
         `;
@@ -1429,8 +1468,8 @@ function renderConversationTable(conversations) {
             <tr onclick="inspectConversation('${escapeHtml(c.id)}', '${escapeHtml(srcKey)}')">
                 <td><span class="conv-id-badge">${escapeHtml(c.short_id)}</span></td>
                 <td><span class="source-pill source-${escapeHtml(srcKey)}">${escapeHtml(srcLabel)}</span></td>
-                <td><div class="conv-prompt-text" title="${escapeHtml(c.first_user_msg)}">${escapeHtml(c.first_user_msg || 'Chưa có prompt')}</div></td>
-                <td><span class="model-pill">${escapeHtml(c.model_name || 'Mặc định')}</span></td>
+                <td><div class="conv-prompt-text" title="${escapeHtml(c.first_user_msg)}">${escapeHtml(c.first_user_msg || uiText('Chưa có prompt', 'No prompt'))}</div></td>
+                <td><span class="model-pill">${escapeHtml(c.model_name || uiText('Mặc định', 'Default'))}</span></td>
                 <td><span style="font-family:'JetBrains Mono';font-size:0.75rem;">${formatDate(c.start_time)}</span></td>
                 <td><span style="color:var(--cyan-400);font-weight:600;">${formatDuration(c.duration_minutes)}</span></td>
                 <td class="num">${c.user_messages}</td>
@@ -1441,7 +1480,7 @@ function renderConversationTable(conversations) {
                 <td class="num"><span class="cost-tag">$${(c.estimated_cost_usd || 0).toFixed(4)}</span></td>
                 <td>${renderSignalBadges(diagnostic, 2)}</td>
                 <td class="action-col" style="text-align:center;">
-                    <button class="btn-inspect" onclick="event.stopPropagation();inspectConversation('${escapeHtml(c.id)}', '${escapeHtml(srcKey)}')">Xem bước</button>
+                    <button class="btn-inspect" onclick="event.stopPropagation();inspectConversation('${escapeHtml(c.id)}', '${escapeHtml(srcKey)}')">${uiText('Xem bước', 'View steps')}</button>
                 </td>
             </tr>
         `;
@@ -1464,22 +1503,22 @@ async function inspectConversation(convId, source = null) {
     modalContent.innerHTML = `
         <div style="margin-bottom:20px;">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-                <h2 style="font-size:1.3rem;">Phiên: ${escapeHtml(conv.short_id)}</h2>
+                <h2 style="font-size:1.3rem;">${uiText('Phiên', 'Session')}: ${escapeHtml(conv.short_id)}</h2>
                 <span class="source-pill source-${escapeHtml(sourceKey)}">${escapeHtml(sourceLabel)}</span>
                 <span class="model-pill">${escapeHtml(conv.model_name)}</span>
             </div>
             <p style="font-size:0.85rem;color:var(--text-secondary);line-height:1.4;">
-                "${escapeHtml(conv.first_user_msg || 'Không có mô tả')}"
+                "${escapeHtml(conv.first_user_msg || uiText('Không có mô tả', 'No description'))}"
             </p>
             <div style="font-size:0.75rem;color:var(--text-muted);margin-top:6px;font-family:'JetBrains Mono';">
-                Nguồn: ${escapeHtml(sourceLabel)} • Bắt đầu: ${formatDate(conv.start_time)} • Thời lượng: ${formatDuration(conv.duration_minutes)} • Chi phí ước tính: $${(conv.estimated_cost_usd || 0).toFixed(4)}
+                ${uiText('Nguồn', 'Source')}: ${escapeHtml(sourceLabel)} • ${uiText('Bắt đầu', 'Started')}: ${formatDate(conv.start_time)} • ${uiText('Thời lượng', 'Duration')}: ${formatDuration(conv.duration_minutes)} • ${uiText('Chi phí ước tính', 'Estimated cost')}: $${(conv.estimated_cost_usd || 0).toFixed(4)}
             </div>
         </div>
 
         <div class="modal-stats-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px;">
             <div class="summary-card" style="padding:14px;text-align:center;">
                 <div style="font-size:1.3rem;font-weight:800;color:var(--indigo-400);font-family:'JetBrains Mono';">${formatNumber(totalTokens)}</div>
-                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Tổng Tokens</div>
+                <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">${uiText('Tổng Tokens', 'Total Tokens')}</div>
             </div>
             <div class="summary-card" style="padding:14px;text-align:center;">
                 <div style="font-size:1.3rem;font-weight:800;color:var(--cyan-400);font-family:'JetBrains Mono';">${formatNumber(conv.input_tokens_est)}</div>
@@ -1495,7 +1534,7 @@ async function inspectConversation(convId, source = null) {
 
         <div id="modal-steps-container">
             <div style="text-align:center;padding:24px;color:var(--text-muted);">
-                <span>⏳ Đang tải chi tiết các bước...</span>
+                <span>⏳ ${uiText('Đang tải chi tiết các bước...', 'Loading step details...')}</span>
             </div>
         </div>
     `;
@@ -1522,13 +1561,13 @@ function renderModalSteps(steps) {
     if (!container) return;
 
     if (steps.length === 0) {
-        container.innerHTML = '<div style="color:var(--text-muted);padding:16px;">Không có bước nào được ghi lại.</div>';
+        container.innerHTML = `<div style="color:var(--text-muted);padding:16px;">${uiText('Không có bước nào được ghi lại.', 'No steps were recorded.')}</div>`;
         return;
     }
 
     container.innerHTML = `
         <h3 style="font-size:0.95rem;margin-bottom:12px;display:flex;align-items:center;gap:8px;">
-            <span>Lịch Sử Tiến Trình (${steps.length} bước)</span>
+            <span>${uiText(`Lịch Sử Tiến Trình (${steps.length} bước)`, `Execution History (${steps.length} steps)`)}</span>
         </h3>
         <div class="steps-list">
             ${steps.map(s => {
@@ -1559,14 +1598,14 @@ function renderModalStepsFallback(conv) {
 
     const toolEntries = Object.entries(conv.tool_types || {});
     container.innerHTML = `
-        <h3 style="font-size:0.95rem;margin-bottom:12px;">Phân Bổ Công Cụ Đã Dùng</h3>
+        <h3 style="font-size:0.95rem;margin-bottom:12px;">${uiText('Phân Bổ Công Cụ Đã Dùng', 'Tool Usage Breakdown')}</h3>
         <div style="display:flex;flex-direction:column;gap:6px;">
             ${toolEntries.length > 0 ? toolEntries.map(([tool, count]) => `
                 <div style="display:flex;justify-content:space-between;background:var(--bg-surface);padding:8px 12px;border-radius:6px;font-family:'JetBrains Mono';font-size:0.8rem;">
                     <span>${tool}</span>
-                    <strong style="color:var(--cyan-400);">${count} lần</strong>
+                    <strong style="color:var(--cyan-400);">${uiText(`${count} lần`, `${count} calls`)}</strong>
                 </div>
-            `).join('') : '<div style="color:var(--text-muted);">Không dùng tool nào</div>'}
+            `).join('') : `<div style="color:var(--text-muted);">${uiText('Không dùng tool nào', 'No tools used')}</div>`}
         </div>
     `;
 }
@@ -1628,7 +1667,7 @@ function setupExport() {
 
     btn.addEventListener('click', () => {
         if (!currentData) {
-            showToast('Chưa có dữ liệu để xuất!', true);
+            showToast(uiText('Chưa có dữ liệu để xuất!', 'No data is available to export yet!'), true);
             return;
         }
 
@@ -1640,7 +1679,7 @@ function setupExport() {
         document.body.appendChild(dlAnchor);
         dlAnchor.click();
         dlAnchor.remove();
-        showToast(`Đã xuất file báo cáo ${filename}!`);
+        showToast(uiText(`Đã xuất file báo cáo ${filename}!`, `Exported report file ${filename}!`));
     });
 }
 
@@ -1803,7 +1842,10 @@ function renderLeaderboardViews() {
     renderLeaderboardCharts(filtered);
     renderLeaderboardTable(filtered);
     const count = document.getElementById('leaderboard-result-count');
-    if (count) count.textContent = `${filtered.length}/${enrichedLeaderboardRows.length} biến thể`;
+    if (count) count.textContent = uiText(
+        `${filtered.length}/${enrichedLeaderboardRows.length} biến thể`,
+        `${filtered.length}/${enrichedLeaderboardRows.length} variants`,
+    );
 }
 
 function renderLeaderboardHighlights(leaderboard) {
@@ -1820,25 +1862,29 @@ function renderLeaderboardHighlights(leaderboard) {
             cls: 'purple', cardCls: 'c-purple', icon: '🧠',
             val: topIQ ? `${topIQ.intelligence_index} IQ` : 'N/A',
             label: '#1 Intelligence Index v4.3',
-            sub: topIQ ? `${topIQ.model_name} • ${topIQ.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập'}` : 'Không có model trong bộ lọc'
+            sub: topIQ
+                ? `${topIQ.model_name} • ${topIQ.benchmark_status === 'estimate' ? uiText('AA ước tính', 'AA estimate') : uiText('AA đo độc lập', 'AA independently measured')}`
+                : uiText('Không có model trong bộ lọc', 'No model matches the filter')
         },
         {
             cls: 'cyan', cardCls: 'c-cyan', icon: '⚡',
             val: topSpeed ? `${topSpeed.speed_tps} t/s` : 'N/A',
-            label: '#1 Tốc Độ Sinh Token',
-            sub: topSpeed ? `${topSpeed.model_name} • output tokens/giây` : 'Không có model trong bộ lọc'
+            label: uiText('#1 Tốc Độ Sinh Token', '#1 Token Generation Speed'),
+            sub: topSpeed ? `${topSpeed.model_name} • ${uiText('output tokens/giây', 'output tokens/second')}` : uiText('Không có model trong bộ lọc', 'No model matches the filter')
         },
         {
             cls: 'emerald', cardCls: 'c-emerald', icon: '💎',
             val: topValue ? `${topValue.value_score} IQ/$` : 'N/A',
-            label: '#1 Giá Trị Theo AA Task',
-            sub: topValue ? `${topValue.model_name} • $${topValue.cost_per_task}/task` : 'AA chưa công bố đủ cost/task'
+            label: uiText('#1 Giá Trị Theo AA Task', '#1 Value by AA Task'),
+            sub: topValue ? `${topValue.model_name} • $${topValue.cost_per_task}/task` : uiText('AA chưa công bố đủ cost/task', 'AA has not published enough cost/task data')
         },
         {
             cls: 'indigo', cardCls: 'c-indigo', icon: '📊',
             val: topUsage ? formatNumber(topUsage.local_total_tokens) : 'N/A',
-            label: '#1 Dùng Nhiều Nhất Cục Bộ',
-            sub: topUsage ? `${topUsage.model_name} • ${topUsage.local_sessions} phiên` : 'Chưa có usage trong bộ lọc'
+            label: uiText('#1 Dùng Nhiều Nhất Cục Bộ', '#1 Local Usage'),
+            sub: topUsage
+                ? uiText(`${topUsage.model_name} • ${topUsage.local_sessions} phiên`, `${topUsage.model_name} • ${topUsage.local_sessions} sessions`)
+                : uiText('Chưa có usage trong bộ lọc', 'No local usage in the filter')
         }
     ];
 
@@ -1889,9 +1935,9 @@ function formatLocalQuota(item) {
     }
     if (Number.isFinite(perMillion) && perMillion > 0) {
         return `<strong>${perMillion.toFixed(2)}% / 1M raw</strong>
-            <div class="leaderboard-cell-sub">${item.local_quota_sample_count} khoảng đo • ${escapeHtml(item.local_quota_confidence || '')}</div>`;
+            <div class="leaderboard-cell-sub">${uiText(`${item.local_quota_sample_count} khoảng đo`, `${item.local_quota_sample_count} intervals`)} • ${escapeHtml(tr(item.local_quota_confidence || ''))}</div>`;
     }
-    return '<span class="leaderboard-na">Chưa đủ mẫu</span>';
+    return `<span class="leaderboard-na">${uiText('Chưa đủ mẫu', 'Insufficient samples')}</span>`;
 }
 
 function renderLeaderboardTable(leaderboard) {
@@ -1914,7 +1960,7 @@ function renderLeaderboardTable(leaderboard) {
     else if (sortType === 'quota-task-asc') list.sort(compareMetricAsc('local_estimated_quota_pct_per_task'));
 
     if (list.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="leaderboard-empty">Không có model phù hợp với bộ lọc hiện tại.</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="9" class="leaderboard-empty">${uiText('Không có model phù hợp với bộ lọc hiện tại.', 'No model matches the current filters.')}</td></tr>`;
         return;
     }
 
@@ -1925,18 +1971,18 @@ function renderLeaderboardTable(leaderboard) {
         else if (item.rank === 3) rankClass = 'rank-3';
         const rankLabel = item.rank ? `#${item.rank}` : 'N/A';
         const provClass = item.provider.toLowerCase().includes('openai') ? 'provider-openai' : 'provider-google';
-        const statusText = item.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập';
+        const statusText = item.benchmark_status === 'estimate' ? uiText('AA ước tính', 'AA estimate') : uiText('AA đo độc lập', 'AA independently measured');
         const statusClass = item.benchmark_status === 'estimate' ? 'aa-estimate' : 'aa-measured';
-        const priorBadge = item.generation_status === 'previous' ? '<span class="aa-status aa-previous">đời trước</span>' : '';
+        const priorBadge = item.generation_status === 'previous' ? `<span class="aa-status aa-previous">${uiText('đời trước', 'previous generation')}</span>` : '';
         const sourceLine = item.benchmark_source_url
             ? `<a class="leaderboard-source-link" href="${escapeHtml(item.benchmark_source_url)}" target="_blank" rel="noopener">AA v${escapeHtml(item.benchmark_index_version || '4.3')} • ${escapeHtml(item.benchmark_as_of || '')}</a>`
             : `AA v${escapeHtml(item.benchmark_index_version || '4.3')}`;
         const costTask = hasLeaderboardMetric(item.cost_per_task)
             ? `<strong>$${Number(item.cost_per_task).toFixed(2)}</strong><div class="leaderboard-cell-sub">${leaderboardMetric(item.value_score)} IQ/$</div>`
-            : '<span class="leaderboard-na">AA chưa công bố</span>';
-        const localCost = item.local_cost_known === false ? 'chưa định giá đủ' : `$${Number(item.local_cost_usd || 0).toFixed(2)}`;
-        const decisionLabel = item.decision_label || (item.generation_status === 'previous' ? 'Dữ liệu lịch sử' : item.badge);
-        const decisionNote = item.decision_note || item.best_for || '';
+            : `<span class="leaderboard-na">${uiText('AA chưa công bố', 'Not published by AA')}</span>`;
+        const localCost = item.local_cost_known === false ? uiText('chưa định giá đủ', 'not fully priced') : `$${Number(item.local_cost_usd || 0).toFixed(2)}`;
+        const decisionLabel = tr(item.decision_label || (item.generation_status === 'previous' ? uiText('Dữ liệu lịch sử', 'Historical data') : item.badge));
+        const decisionNote = tr(item.decision_note || item.best_for || '');
 
         return `
             <tr>
@@ -1951,7 +1997,7 @@ function renderLeaderboardTable(leaderboard) {
                 <td class="num">${costTask}</td>
                 <td class="num leaderboard-price-cell">${formatLeaderboardPrice(item)}</td>
                 <td class="num">${formatLocalQuota(item)}</td>
-                <td class="num"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${item.local_sessions} phiên</div></td>
+                <td class="num"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${uiText(`${item.local_sessions} phiên`, `${item.local_sessions} sessions`)}</div></td>
                 <td class="leaderboard-decision-cell"><strong>${escapeHtml(decisionLabel)}</strong><div>${escapeHtml(decisionNote)}</div></td>
             </tr>
         `;
@@ -1968,9 +2014,9 @@ function renderModelCards(leaderboard) {
     grid.innerHTML = recommended.map(m => `
         <div class="model-card">
             <div>
-                <div class="model-card-top"><h3>${escapeHtml(m.model_name)}</h3><span class="recommendation-order">Lựa chọn ${m.recommendation_order}</span></div>
-                <div class="model-card-badge">${escapeHtml(m.decision_label || m.badge)}</div>
-                <p class="model-card-desc">${escapeHtml(m.decision_note || m.best_for)}</p>
+                <div class="model-card-top"><h3>${escapeHtml(m.model_name)}</h3><span class="recommendation-order">${uiText(`Lựa chọn ${m.recommendation_order}`, `Choice ${m.recommendation_order}`)}</span></div>
+                <div class="model-card-badge">${escapeHtml(tr(m.decision_label || m.badge))}</div>
+                <p class="model-card-desc">${escapeHtml(tr(m.decision_note || m.best_for))}</p>
                 <div class="model-card-metrics">
                     <div class="m-metric"><div class="m-metric-val" style="color:var(--purple-400);">${leaderboardMetric(m.intelligence_index)}</div><div class="m-metric-lbl">Intelligence</div></div>
                     <div class="m-metric"><div class="m-metric-val" style="color:var(--cyan-400);">${leaderboardMetric(m.speed_tps)}</div><div class="m-metric-lbl">Speed (t/s)</div></div>
@@ -1978,8 +2024,8 @@ function renderModelCards(leaderboard) {
                 </div>
             </div>
             <div class="model-card-empirical">
-                <span>Cục bộ: <strong>${formatNumber(m.local_total_tokens)} tokens</strong></span>
-                <span>${hasLeaderboardMetric(m.local_estimated_quota_pct_per_task) ? Number(m.local_estimated_quota_pct_per_task).toFixed(2) + '% quota/task' : 'chưa đủ mẫu quota/task'}</span>
+                <span>${uiText('Cục bộ', 'Local')}: <strong>${formatNumber(m.local_total_tokens)} tokens</strong></span>
+                <span>${hasLeaderboardMetric(m.local_estimated_quota_pct_per_task) ? Number(m.local_estimated_quota_pct_per_task).toFixed(2) + '% quota/task' : uiText('chưa đủ mẫu quota/task', 'insufficient quota/task samples')}</span>
             </div>
         </div>
     `).join('');
@@ -1995,19 +2041,19 @@ function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeek
         if (weeklyResetAtIso) {
             try {
                 const wdt = new Date(weeklyResetAtIso);
-                const dateStr = wdt.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                const timeStr = wdt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-                return `⛔ Khóa theo Tuần (Mở: ${dateStr} ${timeStr})`;
+                const dateStr = wdt.toLocaleDateString(uiLocale(), { weekday: 'short', day: '2-digit', month: '2-digit' });
+                const timeStr = wdt.toLocaleTimeString(uiLocale(), { hour: '2-digit', minute: '2-digit' });
+                return uiText(`⛔ Khóa theo Tuần (Mở: ${dateStr} ${timeStr})`, `⛔ Weekly quota lock (resets: ${dateStr} ${timeStr})`);
             } catch {}
         }
-        return '⛔ Khóa do hết Hạn Mức Tuần (0%)';
+        return uiText('⛔ Khóa do hết Hạn Mức Tuần (0%)', '⛔ Locked by weekly quota (0%)');
     }
 
-    if (isFull) return '🟢 Đã đầy 100% (Tối ưu)';
+    if (isFull) return uiText('🟢 Đã đầy 100% (Tối ưu)', '🟢 Fully recovered (100%)');
 
     if (!resetsAtIso && !nextBatchIso) {
-        if (fallbackMin && fallbackMin > 0) return `Sau ~${fallbackMin} phút`;
-        return '🟢 Đã đầy 100%';
+        if (fallbackMin && fallbackMin > 0) return uiText(`Sau ~${fallbackMin} phút`, `In ~${fallbackMin} min`);
+        return uiText('🟢 Đã đầy 100%', '🟢 Fully recovered (100%)');
     }
 
     try {
@@ -2020,7 +2066,7 @@ function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeek
         const diffMs = targetDt - now;
 
         if (diffMs <= 0) {
-            return '⚡ Đang hồi phục token...';
+            return uiText('⚡ Đang hồi phục token...', '⚡ Recovering quota...');
         }
 
         const totalSec = Math.floor(diffMs / 1000);
@@ -2030,45 +2076,56 @@ function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeek
 
         let countdownStr = '';
         if (hours > 0) {
-            countdownStr = `${hours}h ${mins.toString().padStart(2, '0')}p ${secs.toString().padStart(2, '0')}s`;
+            countdownStr = uiText(
+                `${hours}h ${mins.toString().padStart(2, '0')}p ${secs.toString().padStart(2, '0')}s`,
+                `${hours}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`,
+            );
         } else {
-            countdownStr = `${mins}p ${secs.toString().padStart(2, '0')}s`;
+            countdownStr = uiText(
+                `${mins}p ${secs.toString().padStart(2, '0')}s`,
+                `${mins}m ${secs.toString().padStart(2, '0')}s`,
+            );
         }
 
-        const timeStr = targetDt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const timeStr = targetDt.toLocaleTimeString(uiLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         // If there's an earlier partial batch recovery
         if (batchDt && fullDt && batchDt.getTime() < fullDt.getTime() && (batchDt - now) > 0) {
             const batchSec = Math.floor((batchDt - now) / 1000);
             const bMin = Math.floor(batchSec / 60);
             const bSec = batchSec % 60;
-            return `${timeStr} (Còn ~${countdownStr} • Đợt đầu: ~${bMin}p ${bSec}s)`;
+            return uiText(
+                `${timeStr} (Còn ~${countdownStr} • Đợt đầu: ~${bMin}p ${bSec}s)`,
+                `${timeStr} (~${countdownStr} remaining • first recovery: ~${bMin}m ${bSec}s)`
+            );
         }
 
-        return `${timeStr} (Còn ~${countdownStr})`;
+        return uiText(`${timeStr} (Còn ~${countdownStr})`, `${timeStr} (~${countdownStr} remaining)`);
     } catch {
-        return `Sau ~${fallbackMin} phút`;
+        return uiText(`Sau ~${fallbackMin} phút`, `In ~${fallbackMin} min`);
     }
 }
 
 // Helper: Format weekly reset time and countdown
 function formatWeeklyResetClock(resetsAtIso, fallbackHours, isFull) {
-    if (isFull) return '🟢 Đã sẵn sàng 100%';
+    if (isFull) return uiText('🟢 Đã sẵn sàng 100%', '🟢 Fully available (100%)');
     if (!resetsAtIso) {
         if (fallbackHours && fallbackHours > 0) {
             const d = Math.floor(fallbackHours / 24);
             const h = Math.round(fallbackHours % 24);
-            return d > 0 ? `Sau ~${d} ngày ${h}h` : `Sau ~${h} giờ`;
+            return d > 0
+                ? uiText(`Sau ~${d} ngày ${h}h`, `In ~${d}d ${h}h`)
+                : uiText(`Sau ~${h} giờ`, `In ~${h}h`);
         }
-        return '🟢 Đã sẵn sàng 100%';
+        return uiText('🟢 Đã sẵn sàng 100%', '🟢 Fully available (100%)');
     }
     try {
         const dt = new Date(resetsAtIso);
-        const dateStr = dt.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' });
-        const timeStr = dt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        const dateStr = dt.toLocaleDateString(uiLocale(), { weekday: 'short', day: '2-digit', month: '2-digit' });
+        const timeStr = dt.toLocaleTimeString(uiLocale(), { hour: '2-digit', minute: '2-digit' });
         const now = new Date();
         const diffMs = dt - now;
-        if (diffMs <= 0) return '⚡ Đang reset tuần...';
+        if (diffMs <= 0) return uiText('⚡ Đang reset tuần...', '⚡ Weekly quota is resetting...');
 
         const totalSec = Math.floor(diffMs / 1000);
         const d = Math.floor(totalSec / 86400);
@@ -2078,16 +2135,16 @@ function formatWeeklyResetClock(resetsAtIso, fallbackHours, isFull) {
 
         let countdownStr = '';
         if (d > 0) {
-            countdownStr = `${d} ngày ${h}h ${m}p`;
+            countdownStr = uiText(`${d} ngày ${h}h ${m}p`, `${d}d ${h}h ${m}m`);
         } else if (h > 0) {
-            countdownStr = `${h}h ${m}p ${s}s`;
+            countdownStr = uiText(`${h}h ${m}p ${s}s`, `${h}h ${m}m ${s}s`);
         } else {
-            countdownStr = `${m}p ${s}s`;
+            countdownStr = uiText(`${m}p ${s}s`, `${m}m ${s}s`);
         }
 
-        return `${dateStr} ${timeStr} (Còn ~${countdownStr})`;
+        return uiText(`${dateStr} ${timeStr} (Còn ~${countdownStr})`, `${dateStr} ${timeStr} (~${countdownStr} remaining)`);
     } catch {
-        return `Sau ~${fallbackHours} giờ`;
+        return uiText(`Sau ~${fallbackHours} giờ`, `In ~${fallbackHours}h`);
     }
 }
 
@@ -2177,7 +2234,9 @@ function renderQuotaSourceSummary(sourceBreakdowns) {
         const g5Toks = Number(s.gemini_5h_tokens || 0);
         const gwToks = Number(s.gemini_weekly_tokens || 0);
         const totalToks = Number(s.total_tokens || 0);
-        const unitLabel = s.token_unit ? 'token thực từ report' : 'token ước lượng';
+        const unitLabel = s.token_unit
+            ? uiText('token thực từ report', 'exact report tokens')
+            : uiText('token ước lượng', 'estimated tokens');
         const key = escapeHtml(s.key || 'source');
         const label = escapeHtml(s.label || key);
 
@@ -2189,11 +2248,11 @@ function renderQuotaSourceSummary(sourceBreakdowns) {
                 </div>
                 <div class="quota-source-metrics">
                     <div class="q-source-metric">
-                        <span class="q-source-lbl">Gemini 5 Giờ:</span>
+                        <span class="q-source-lbl">${uiText('Gemini 5 Giờ:', 'Gemini 5 Hours:')}</span>
                         <strong class="q-source-val" style="color:var(--cyan-400);">${formatNumber(g5Toks)}</strong>
                     </div>
                     <div class="q-source-metric">
-                        <span class="q-source-lbl">Gemini Tuần (7D):</span>
+                        <span class="q-source-lbl">${uiText('Gemini Tuần (7D):', 'Gemini Weekly (7D):')}</span>
                         <strong class="q-source-val" style="color:var(--indigo-400);">${formatNumber(gwToks)}</strong>
                     </div>
                 </div>
@@ -2221,16 +2280,16 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
             const g5Next = win5h.gemini?.next_batch_resets_at;
             const g5Full = win5h.gemini?.resets_at;
             if (win5h.gemini?.is_weekly_capped) {
-                resetEl.textContent = `⛔ Khóa do hết Hạn Mức Tuần`;
+                resetEl.textContent = uiText('⛔ Khóa do hết Hạn Mức Tuần', '⛔ Locked by weekly quota');
             } else if (g5Full) {
                 try {
                     const dt = new Date(g5Full);
-                    resetEl.textContent = dt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+                    resetEl.textContent = dt.toLocaleTimeString(uiLocale(), { hour: '2-digit', minute: '2-digit' });
                 } catch {
-                    resetEl.textContent = `~${win5h.resets_in_minutes} phút`;
+                    resetEl.textContent = uiText(`~${win5h.resets_in_minutes} phút`, `~${win5h.resets_in_minutes} min`);
                 }
             } else {
-                resetEl.textContent = `● Đã hồi phục 100%`;
+                resetEl.textContent = uiText('● Đã hồi phục 100%', '● Fully recovered (100%)');
             }
         }
 
@@ -2259,19 +2318,24 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
             if (g5Status) {
                 const isNormal = displayPct > 25;
                 if (Number(g5.worker_used_tokens || 0) > 0 && !g5.worker_prediction_applied) {
-                    g5Status.textContent = `⚠️ Đã thấy ${formatNumber(g5.worker_used_tokens)} token worker; nhập % chính thức 1 lần để hiệu chuẩn`;
+                    g5Status.textContent = uiText(
+                        `⚠️ Đã thấy ${formatNumber(g5.worker_used_tokens)} token worker; nhập % chính thức 1 lần để hiệu chuẩn`,
+                        `⚠️ ${formatNumber(g5.worker_used_tokens)} worker tokens detected; enter the official remaining % once to calibrate`
+                    );
                     g5Status.className = `quota-status-pill pill-warning`;
                 } else if (g5.status === 'Locked (Weekly Capped)' || g5.is_weekly_capped) {
-                    g5Status.textContent = `⛔ Khóa do hết Hạn Mức Tuần (0%)`;
+                    g5Status.textContent = uiText('⛔ Khóa do hết Hạn Mức Tuần (0%)', '⛔ Locked by weekly quota (0%)');
                     g5Status.className = `quota-status-pill pill-danger`;
                 } else if (isExhausted) {
-                    g5Status.textContent = `⛔ Hết hạn mức (0%)`;
+                    g5Status.textContent = uiText('⛔ Hết hạn mức (0%)', '⛔ Quota depleted (0%)');
                     g5Status.className = `quota-status-pill pill-danger`;
                 } else if (isFull) {
-                    g5Status.textContent = `● Đầy 100% (Tối ưu)`;
+                    g5Status.textContent = uiText('● Đầy 100% (Tối ưu)', '● Fully available (100%)');
                     g5Status.className = `quota-status-pill pill-success`;
                 } else {
-                    g5Status.textContent = isNormal ? `● Đang dùng (${displayPct}%)` : `⚠️ Gần hết (${displayPct}%)`;
+                    g5Status.textContent = isNormal
+                        ? uiText(`● Đang dùng (${displayPct}%)`, `● In use (${displayPct}%)`)
+                        : uiText(`⚠️ Gần hết (${displayPct}%)`, `⚠️ Near limit (${displayPct}%)`);
                     g5Status.className = `quota-status-pill ${isNormal ? 'pill-info' : 'pill-warning'}`;
                 }
             }
@@ -2304,16 +2368,18 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
             if (e5Status) {
                 const isNormal = displayPct > 25;
                 if (e5.status === 'Locked (Weekly Capped)' || e5.is_weekly_capped) {
-                    e5Status.textContent = `⛔ Khóa do hết Hạn Mức Tuần (0%)`;
+                    e5Status.textContent = uiText('⛔ Khóa do hết Hạn Mức Tuần (0%)', '⛔ Locked by weekly quota (0%)');
                     e5Status.className = `quota-status-pill pill-danger`;
                 } else if (isExhausted) {
-                    e5Status.textContent = `⛔ Hết hạn mức (0%)`;
+                    e5Status.textContent = uiText('⛔ Hết hạn mức (0%)', '⛔ Quota depleted (0%)');
                     e5Status.className = `quota-status-pill pill-danger`;
                 } else if (isFull) {
-                    e5Status.textContent = `● Đầy 100% (Tối ưu)`;
+                    e5Status.textContent = uiText('● Đầy 100% (Tối ưu)', '● Fully available (100%)');
                     e5Status.className = `quota-status-pill pill-success`;
                 } else {
-                    e5Status.textContent = isNormal ? `● Đang dùng (${displayPct}%)` : `⚠️ Gần hết (${displayPct}%)`;
+                    e5Status.textContent = isNormal
+                        ? uiText(`● Đang dùng (${displayPct}%)`, `● In use (${displayPct}%)`)
+                        : uiText(`⚠️ Gần hết (${displayPct}%)`, `⚠️ Near limit (${displayPct}%)`);
                     e5Status.className = `quota-status-pill ${isNormal ? 'pill-info' : 'pill-warning'}`;
                 }
             }
@@ -2352,13 +2418,15 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
             if (gwStatus) {
                 const isNormal = displayPct > 25;
                 if (isExhausted) {
-                    gwStatus.textContent = `⛔ Hết hạn mức tuần (0%)`;
+                    gwStatus.textContent = uiText('⛔ Hết hạn mức tuần (0%)', '⛔ Weekly quota depleted (0%)');
                     gwStatus.className = `quota-status-pill pill-danger`;
                 } else if (isFull) {
-                    gwStatus.textContent = `● Đầy 100% (Tối ưu)`;
+                    gwStatus.textContent = uiText('● Đầy 100% (Tối ưu)', '● Fully available (100%)');
                     gwStatus.className = `quota-status-pill pill-success`;
                 } else {
-                    gwStatus.textContent = isNormal ? `● Đang dùng (${displayPct}%)` : `⚠️ Gần hết (${displayPct}%)`;
+                    gwStatus.textContent = isNormal
+                        ? uiText(`● Đang dùng (${displayPct}%)`, `● In use (${displayPct}%)`)
+                        : uiText(`⚠️ Gần hết (${displayPct}%)`, `⚠️ Near limit (${displayPct}%)`);
                     gwStatus.className = `quota-status-pill ${isNormal ? 'pill-info' : 'pill-warning'}`;
                 }
             }
@@ -2391,13 +2459,15 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
             if (ewStatus) {
                 const isNormal = displayPct > 25;
                 if (isExhausted) {
-                    ewStatus.textContent = `⛔ Hết hạn mức tuần (0%)`;
+                    ewStatus.textContent = uiText('⛔ Hết hạn mức tuần (0%)', '⛔ Weekly quota depleted (0%)');
                     ewStatus.className = `quota-status-pill pill-danger`;
                 } else if (isFull) {
-                    ewStatus.textContent = `● Đầy 100% (Tối ưu)`;
+                    ewStatus.textContent = uiText('● Đầy 100% (Tối ưu)', '● Fully available (100%)');
                     ewStatus.className = `quota-status-pill pill-success`;
                 } else {
-                    ewStatus.textContent = isNormal ? `● Đang dùng (${displayPct}%)` : `⚠️ Gần hết (${displayPct}%)`;
+                    ewStatus.textContent = isNormal
+                        ? uiText(`● Đang dùng (${displayPct}%)`, `● In use (${displayPct}%)`)
+                        : uiText(`⚠️ Gần hết (${displayPct}%)`, `⚠️ Near limit (${displayPct}%)`);
                     ewStatus.className = `quota-status-pill ${isNormal ? 'pill-info' : 'pill-warning'}`;
                 }
             }
@@ -2423,9 +2493,12 @@ function renderCodexRateLimits(codexUsage) {
         container.innerHTML = `
             <div class="quota-unavailable-card">
                 <div style="font-size:1.4rem;margin-bottom:6px;">📡</div>
-                <div style="font-weight:700;color:var(--text-main);font-size:0.95rem;margin-bottom:4px;">Chưa Có Dữ Liệu Hạn Mức Codex</div>
+                <div style="font-weight:700;color:var(--text-main);font-size:0.95rem;margin-bottom:4px;">${uiText('Chưa Có Dữ Liệu Hạn Mức Codex', 'Codex Quota Data Unavailable')}</div>
                 <div style="font-size:0.8rem;color:var(--text-muted);max-width:540px;margin:0 auto;line-height:1.4;">
-                    Chưa đọc được hạn mức trực tiếp từ Codex và chưa có bản ghi phiên làm việc để đối chiếu. Hãy kiểm tra Codex đã được cài đặt và đăng nhập.
+                    ${uiText(
+                        'Chưa đọc được hạn mức trực tiếp từ Codex và chưa có bản ghi phiên làm việc để đối chiếu. Hãy kiểm tra Codex đã được cài đặt và đăng nhập.',
+                        'Live Codex quota could not be read and no session-log fallback is available. Check that Codex is installed and signed in.'
+                    )}
                 </div>
             </div>
         `;
@@ -2433,20 +2506,27 @@ function renderCodexRateLimits(codexUsage) {
     }
 
     const isLive = rateLimits.source === 'codex_app_server';
-    const sourceLabel = isLive ? 'Codex trực tiếp' : 'Bản ghi phiên Codex';
+    const sourceLabel = isLive ? uiText('Codex trực tiếp', 'Live Codex') : uiText('Bản ghi phiên Codex', 'Codex session logs');
     if (freshnessBox && freshnessLabel) {
         freshnessBox.style.display = 'inline-flex';
-        const obsTime = rateLimits.observed_at ? formatDate(rateLimits.observed_at) : 'Gần đây';
-        const fallbackNote = rateLimits.fallback_reason ? ' • Chưa kết nối trực tiếp; số liệu có thể chưa cập nhật.' : '';
-        freshnessLabel.innerHTML = `Nguồn: <strong>${sourceLabel}</strong> • Ghi nhận: <strong>${obsTime}</strong>${fallbackNote}`;
+        const obsTime = rateLimits.observed_at ? formatDate(rateLimits.observed_at) : uiText('Gần đây', 'Recently');
+        const fallbackNote = rateLimits.fallback_reason
+            ? uiText(' • Chưa kết nối trực tiếp; số liệu có thể chưa cập nhật.', ' • Live connection unavailable; values may be stale.')
+            : '';
+        freshnessLabel.innerHTML = uiText(
+            `Nguồn: <strong>${sourceLabel}</strong> • Ghi nhận: <strong>${obsTime}</strong>${fallbackNote}`,
+            `Source: <strong>${sourceLabel}</strong> • Observed: <strong>${obsTime}</strong>${fallbackNote}`
+        );
     }
 
-    const planBadge = rateLimits.plan_type ? `<span class="brand-badge brand-codex" style="text-transform:uppercase;font-size:0.68rem;font-weight:700;">Gói: ${escapeHtml(rateLimits.plan_type)}</span>` : '';
+    const planBadge = rateLimits.plan_type ? `<span class="brand-badge brand-codex" style="text-transform:uppercase;font-size:0.68rem;font-weight:700;">${uiText('Gói', 'Plan')}: ${escapeHtml(rateLimits.plan_type)}</span>` : '';
 
     container.innerHTML = rateLimits.windows.map((w, idx) => {
         const remPct = (w.remaining_percent !== undefined && w.remaining_percent !== null) ? Number(w.remaining_percent).toFixed(1) : '100.0';
         const usedPct = (w.used_percent !== undefined && w.used_percent !== null) ? Number(w.used_percent).toFixed(1) : '0.0';
-        const durationText = w.label || (w.window_minutes >= 60 ? `Khung ${w.window_minutes / 60} Giờ` : `Khung ${w.window_minutes} Phút`);
+        const durationText = w.label || (w.window_minutes >= 60
+            ? uiText(`Khung ${w.window_minutes / 60} Giờ`, `${w.window_minutes / 60}-Hour Window`)
+            : uiText(`Khung ${w.window_minutes} Phút`, `${w.window_minutes}-Minute Window`));
         const clockId = `codex-window-reset-clock-${idx}`;
 
         let statusClass = 'pill-info';
@@ -2471,14 +2551,14 @@ function renderCodexRateLimits(codexUsage) {
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;">
                         ${planBadge}
-                        <span class="quota-status-pill ${statusClass}">${escapeHtml(w.status || 'Bình Thường')}</span>
+                        <span class="quota-status-pill ${statusClass}">${escapeHtml(tr(w.status || uiText('Bình Thường', 'Normal')))}</span>
                     </div>
                 </div>
 
                 <div class="quota-body">
                     <div class="quota-metric-main">
                         <div class="quota-big-val" style="color:var(--emerald-400);">${remPct}%</div>
-                        <div class="quota-big-label">Hạn Mức Còn Lại</div>
+                        <div class="quota-big-label">${uiText('Hạn Mức Còn Lại', 'Quota Remaining')}</div>
                     </div>
 
                     <div class="quota-progress-bar-wrap">
@@ -2487,19 +2567,19 @@ function renderCodexRateLimits(codexUsage) {
 
                     <div class="quota-stats-grid">
                         <div class="q-stat">
-                            <span class="q-stat-label">% Đã Dùng</span>
+                            <span class="q-stat-label">${uiText('% Đã Dùng', '% Used')}</span>
                             <span class="q-stat-val">${usedPct}%</span>
                         </div>
                         <div class="q-stat">
-                            <span class="q-stat-label">% Còn Lại</span>
+                            <span class="q-stat-label">${uiText('% Còn Lại', '% Remaining')}</span>
                             <span class="q-stat-val q-rem">${remPct}%</span>
                         </div>
                         <div class="q-stat">
-                            <span class="q-stat-label">Thời Lượng Cửa Sổ</span>
-                            <span class="q-stat-val">${w.window_minutes} phút</span>
+                            <span class="q-stat-label">${uiText('Thời Lượng Cửa Sổ', 'Window Duration')}</span>
+                            <span class="q-stat-val">${uiText(`${w.window_minutes} phút`, `${w.window_minutes} min`)}</span>
                         </div>
                         <div class="q-stat">
-                            <span class="q-stat-label">Nguồn Dữ Liệu</span>
+                            <span class="q-stat-label">${uiText('Nguồn Dữ Liệu', 'Data Source')}</span>
                             <span class="q-stat-val" style="font-size:0.75rem;">${sourceLabel}</span>
                         </div>
                     </div>
@@ -2507,7 +2587,7 @@ function renderCodexRateLimits(codexUsage) {
                     <div class="quota-reset-indicator" style="margin-top:14px;padding:9px 12px;background:rgba(16,185,129,0.04);border:1px solid rgba(16,185,129,0.15);border-radius:8px;font-size:0.8rem;display:flex;align-items:center;justify-content:space-between;">
                         <span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--emerald-400)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                            Mốc reset:
+                            ${uiText('Mốc reset:', 'Reset time:')}
                         </span>
                         <strong id="${clockId}" style="color:var(--emerald-400);font-family:'JetBrains Mono',monospace;">
                             ${resetText}
@@ -2554,20 +2634,24 @@ function updateCalibrateLivePreview() {
         const confidence = Number(c.confidence_pct || 0).toFixed(1);
         const obs = c.observations || 0;
         const pairs = c.usable_pairs || 0;
-        const statusMap = { learning: 'Đang học', calibrated: 'Đã hiệu chuẩn', stable: 'Ổn định' };
-        const status = statusMap[c.status] || 'Đang học';
+        const statusMap = {
+            learning: uiText('Đang học', 'Learning'),
+            calibrated: uiText('Đã hiệu chuẩn', 'Calibrated'),
+            stable: uiText('Ổn định', 'Stable'),
+        };
+        const status = statusMap[c.status] || uiText('Đang học', 'Learning');
         const onePct = c.one_percent_tokens || (r.totalLim ? r.totalLim / 100 : 0);
-        el.innerHTML = `<div>Token tracker đang thấy: <strong>${formatNumber(r.trackedUsed)} tokens</strong></div>
-            <div>% IDE nhập lần này: <strong>${r.pct.toFixed(1)}%</strong> → neo còn khoảng <strong style="color:var(--emerald-400);">${formatNumber(r.rem)} tokens</strong></div>
-            <div>Ước lượng tổng hiện tại: <strong style="color:var(--cyan-400);">${formatNumber(r.totalLim)} tokens</strong> · 1% ≈ ${formatNumber(Math.round(onePct))} tokens</div>
-            <div>Hiệu chuẩn: <strong>${status}</strong> · tin cậy ${confidence}% · ${obs} điểm đo / ${pairs} cặp hữu ích</div>
-            <div style="opacity:.72;">Một lần nhập % chỉ được ghi thành điểm đo; hệ thống không dùng riêng điểm này để ép tính lại tổng quota.</div>`;
+        el.innerHTML = `<div>${uiText('Token tracker đang thấy:', 'Tokens currently seen by the tracker:')} <strong>${formatNumber(r.trackedUsed)} tokens</strong></div>
+            <div>${uiText('% IDE nhập lần này:', 'IDE % entered this time:')} <strong>${r.pct.toFixed(1)}%</strong> → ${uiText('neo còn khoảng', 'anchors roughly')} <strong style="color:var(--emerald-400);">${formatNumber(r.rem)} tokens</strong> ${uiText('còn lại', 'remaining')}</div>
+            <div>${uiText('Ước lượng tổng hiện tại:', 'Current total estimate:')} <strong style="color:var(--cyan-400);">${formatNumber(r.totalLim)} tokens</strong> · 1% ≈ ${formatNumber(Math.round(onePct))} tokens</div>
+            <div>${uiText('Hiệu chuẩn:', 'Calibration:')} <strong>${status}</strong> · ${uiText('tin cậy', 'confidence')} ${confidence}% · ${obs} ${uiText('điểm đo', 'observations')} / ${pairs} ${uiText('cặp hữu ích', 'usable pairs')}</div>
+            <div style="opacity:.72;">${uiText('Một lần nhập % chỉ được ghi thành điểm đo; hệ thống không dùng riêng điểm này để ép tính lại tổng quota.', 'A single percentage entry is recorded only as an observation; the tracker does not use that point alone to force a new total-quota estimate.')}</div>`;
     };
 
     renderBox('preview-gem-5h', resG5, 'Gemini 5h');
     renderBox('preview-ext-5h', resE5, 'External 5h');
-    renderBox('preview-gem-wk', resGW, 'Gemini Tuần');
-    renderBox('preview-ext-wk', resEW, 'External Tuần');
+    renderBox('preview-gem-wk', resGW, uiText('Gemini Tuần', 'Gemini Weekly'));
+    renderBox('preview-ext-wk', resEW, uiText('External Tuần', 'External Weekly'));
 }
 
 function openCalibrateModal() {
@@ -2649,7 +2733,7 @@ async function saveCalibrationData() {
     const ew = parseFloat(document.getElementById('input-cal-ext-wk')?.value || '100');
 
     if ([g5, e5, gw, ew].some(v => !Number.isFinite(v) || v < 0 || v > 100)) {
-        showToast('Các giá trị quota phải nằm trong khoảng 0–100%.', true);
+        showToast(uiText('Các giá trị quota phải nằm trong khoảng 0–100%.', 'Quota values must be between 0 and 100%.'), true);
         return;
     }
 
@@ -2665,7 +2749,7 @@ async function saveCalibrationData() {
 
     if (btnSaveCal) {
         btnSaveCal.disabled = true;
-        btnSaveCal.innerHTML = '<span>⏳ Đang lưu & hiệu chuẩn...</span>';
+        btnSaveCal.innerHTML = `<span>⏳ ${uiText('Đang lưu & hiệu chuẩn...', 'Saving & calibrating...')}</span>`;
     }
 
     try {
@@ -2698,15 +2782,18 @@ async function saveCalibrationData() {
             const stable = calValues.filter(c => c?.status === 'stable').length;
             const calibrated = calValues.filter(c => c?.status === 'calibrated').length;
             const retained = calValues.filter(c => c?.method === 'prior_retained' || (c?.retained_reasons || []).length > 0).length;
-            showToast(`Đã ghi nhận điểm đo mới. Hiệu chuẩn: ${stable} ổn định, ${calibrated} đã hiệu chuẩn; ${retained} bucket giữ prior khi thiếu thông tin.`);
+            showToast(uiText(
+                `Đã ghi nhận điểm đo mới. Hiệu chuẩn: ${stable} ổn định, ${calibrated} đã hiệu chuẩn; ${retained} bucket giữ prior khi thiếu thông tin.`,
+                `New observation recorded. Calibration: ${stable} stable, ${calibrated} calibrated; ${retained} buckets retained their prior because evidence was insufficient.`,
+            ));
             await forceRefreshAfterMutation();
         } else {
-            const msg = data.message || `Lỗi máy chủ (${res.status})`;
-            showToast(`Không thể lưu hiệu chỉnh: ${msg}`, true);
+            const msg = data.message || uiText(`Lỗi máy chủ (${res.status})`, `Server error (${res.status})`);
+            showToast(uiText(`Không thể lưu hiệu chỉnh: ${msg}`, `Could not save calibration: ${msg}`), true);
         }
     } catch (err) {
         console.error("Save calibration error:", err);
-        showToast(`Lỗi kết nối khi lưu: ${err.message}`, true);
+        showToast(uiText(`Lỗi kết nối khi lưu: ${err.message}`, `Connection error while saving: ${err.message}`), true);
     } finally {
         if (btnSaveCal) {
             btnSaveCal.disabled = false;
@@ -2718,13 +2805,16 @@ async function saveCalibrationData() {
 // Global Quick Reset Quota Cycle Function
 window.quickResetCycle = async function(target) {
     const isGem = target === 'gemini_5h';
-    const name = isGem ? 'Gemini (5 Giờ)' : 'Model Ngoài (5 Giờ)';
+    const name = isGem ? uiText('Gemini (5 Giờ)', 'Gemini (5 Hours)') : uiText('Model Ngoài (5 Giờ)', 'External Models (5 Hours)');
     const defaultPct = isGem ? '90.0' : '100.0';
-    const inputVal = prompt(`Xác nhận vừa reset chu kỳ mới cho ${name}!\nNhập số % còn lại hiện tại trong IDE Settings:`, defaultPct);
+    const inputVal = prompt(uiText(
+        `Xác nhận vừa reset chu kỳ mới cho ${name}!\nNhập số % còn lại hiện tại trong IDE Settings:`,
+        `Confirm that a new cycle has just reset for ${name}!\nEnter the current remaining percentage shown in IDE Settings:`,
+    ), defaultPct);
     if (inputVal === null) return;
     const pct = parseFloat(inputVal);
     if (isNaN(pct) || pct < 0 || pct > 100) {
-        showToast('Vui lòng nhập số % hợp lệ từ 0 đến 100!', true);
+        showToast(uiText('Vui lòng nhập số % hợp lệ từ 0 đến 100!', 'Enter a valid percentage from 0 to 100!'), true);
         return;
     }
     try {
@@ -2737,13 +2827,16 @@ window.quickResetCycle = async function(target) {
             })
         });
         if (res.ok) {
-            showToast(`Đã bắt đầu chu kỳ quan sát mới cho ${name} ở ${pct}% còn lại; năng lực quota đã học được giữ nguyên.`);
+            showToast(uiText(
+                `Đã bắt đầu chu kỳ quan sát mới cho ${name} ở ${pct}% còn lại; năng lực quota đã học được giữ nguyên.`,
+                `Started a new observation cycle for ${name} at ${pct}% remaining; the learned quota capacity was preserved.`,
+            ));
             await forceRefreshAfterMutation();
         } else {
-            showToast('Lỗi khi đặt lại chu kỳ!', true);
+            showToast(uiText('Lỗi khi đặt lại chu kỳ!', 'Could not reset the cycle!'), true);
         }
     } catch (e) {
-        showToast('Lỗi kết nối khi đặt lại chu kỳ!', true);
+        showToast(uiText('Lỗi kết nối khi đặt lại chu kỳ!', 'Connection error while resetting the cycle!'), true);
     }
 };
 
@@ -2757,18 +2850,18 @@ function renderAccountManager(currentAcc, accountsManager) {
     if (!currentAcc) return;
 
     // Header Pill
-    setElementText('account-name', currentAcc.name || 'Người dùng');
-    setElementText('account-email', currentAcc.email || 'Chưa xác định');
+    setElementText('account-name', currentAcc.name || uiText('Người dùng', 'User'));
+    setElementText('account-email', currentAcc.email || uiText('Chưa xác định', 'Unknown'));
     const headerAvatar = document.getElementById('user-avatar');
     if (headerAvatar && currentAcc.profile_pic) {
         headerAvatar.src = currentAcc.profile_pic;
     }
 
     // Quota Tab Active Account Card
-    setElementText('quota-user-name', currentAcc.name || 'Người dùng');
-    setElementText('quota-user-email', currentAcc.email || 'Chưa xác định');
-    setElementText('quota-user-tier', `Gói: ${currentAcc.tier || 'Not detected'}`);
-    setElementText('quota-account-status', currentAcc.is_logged_in ? 'Đang Đăng Nhập (Active)' : 'Not connected');
+    setElementText('quota-user-name', currentAcc.name || uiText('Người dùng', 'User'));
+    setElementText('quota-user-email', currentAcc.email || uiText('Chưa xác định', 'Unknown'));
+    setElementText('quota-user-tier', uiText(`Gói: ${currentAcc.tier || 'Chưa xác định'}`, `Plan: ${currentAcc.tier || 'Not detected'}`));
+    setElementText('quota-account-status', currentAcc.is_logged_in ? uiText('Đang Đăng Nhập (Active)', 'Signed In (Active)') : uiText('Chưa kết nối', 'Not connected'));
     const quotaAvatar = document.getElementById('quota-user-avatar');
     if (quotaAvatar && currentAcc.profile_pic) {
         quotaAvatar.src = currentAcc.profile_pic;
@@ -2784,7 +2877,7 @@ function renderAccountManager(currentAcc, accountsManager) {
                     ${escapeHtml(acc.email)} (${escapeHtml(acc.name)})
                 </option>
             `).join('')
-            : '<option value="">No account detected</option>';
+            : `<option value="">${uiText('Không phát hiện tài khoản', 'No account detected')}</option>`;
         switcher.disabled = accountsList.length === 0;
 
         switcher.onchange = async () => {
@@ -2792,7 +2885,7 @@ function renderAccountManager(currentAcc, accountsManager) {
             if (!targetEmail) return;
             try {
                 await fetch(`/api/account/switch?email=${encodeURIComponent(targetEmail)}`, { method: 'POST' });
-                showToast(`Đã chuyển sang xem tài khoản: ${targetEmail}`);
+                showToast(uiText(`Đã chuyển sang xem tài khoản: ${targetEmail}`, `Switched account view to: ${targetEmail}`));
                 await forceRefreshAfterMutation();
             } catch (err) {
                 console.error("Account switch error:", err);
@@ -2807,7 +2900,7 @@ function renderAccountManager(currentAcc, accountsManager) {
         tbody.innerHTML = accountsList.map(acc => {
             const isActive = acc.email === accountsManager.active_email;
             const lim = acc.limits || {};
-            const lastActiveStr = acc.last_active ? new Date(acc.last_active).toLocaleString('vi-VN') : 'Gần đây';
+            const lastActiveStr = acc.last_active ? new Date(acc.last_active).toLocaleString(uiLocale()) : tr('Gần đây');
 
             return `
                 <tr>
@@ -2817,26 +2910,26 @@ function renderAccountManager(currentAcc, accountsManager) {
                             <strong style="color:var(--cyan-400);font-family:'JetBrains Mono',monospace;">${escapeHtml(acc.email)}</strong>
                         </div>
                     </td>
-                    <td><strong>${escapeHtml(acc.name || 'Người dùng')}</strong></td>
+                    <td><strong>${escapeHtml(acc.name || uiText('Người dùng', 'User'))}</strong></td>
                     <td><span class="step-badge model">${escapeHtml(acc.tier || 'Pro Tier')}</span></td>
                     <td class="num">${formatNumber(lim.gemini_5h_tokens || 500000)} / ${formatNumber(lim.external_5h_tokens || 60000)}</td>
                     <td class="num">${formatNumber(lim.gemini_weekly_tokens || 2500000)} / ${formatNumber(lim.external_weekly_tokens || 250000)}</td>
                     <td style="font-size:0.75rem;color:var(--text-muted);">${lastActiveStr}</td>
                     <td>
                         <span class="quota-status-pill ${isActive ? 'pill-success' : 'pill-info'}">
-                            ${isActive ? '● Đang kích hoạt' : 'Đã lưu'}
+                            ${isActive ? uiText('● Đang kích hoạt', '● Active') : uiText('Đã lưu', 'Saved')}
                         </span>
                     </td>
                     <td>
                         <div style="display:flex;gap:6px;align-items:center;">
                             ${!isActive ? `
-                                <button class="btn-table-action" onclick="switchAccount('${escapeHtml(acc.email)}')" title="Chuyển sang tài khoản này">
-                                    👉 Chọn
+                                <button class="btn-table-action" onclick="switchAccount('${escapeHtml(acc.email)}')" title="${uiText('Chuyển sang tài khoản này', 'Switch to this account')}">
+                                    👉 ${uiText('Chọn', 'Select')}
                                 </button>
-                                <button class="btn-table-action btn-danger" onclick="deleteAccount('${escapeHtml(acc.email)}')" title="Xóa tài khoản khỏi danh bạ">
+                                <button class="btn-table-action btn-danger" onclick="deleteAccount('${escapeHtml(acc.email)}')" title="${uiText('Xóa tài khoản khỏi danh bạ', 'Remove account from the saved list')}">
                                     ✕
                                 </button>
-                            ` : `<span style="font-size:0.75rem;color:var(--emerald-400);font-weight:700;">Hiện tại</span>`}
+                            ` : `<span style="font-size:0.75rem;color:var(--emerald-400);font-weight:700;">${uiText('Hiện tại', 'Current')}</span>`}
                         </div>
                     </td>
                 </tr>
@@ -2866,7 +2959,7 @@ async function saveNewAccount() {
     const tier = document.getElementById('select-new-tier')?.value;
 
     if (!email || !email.includes('@')) {
-        showToast('Vui lòng nhập địa chỉ email hợp lệ!', true);
+        showToast(uiText('Vui lòng nhập địa chỉ email hợp lệ!', 'Enter a valid email address!'), true);
         return;
     }
 
@@ -2883,21 +2976,21 @@ async function saveNewAccount() {
         });
         if (res.ok) {
             closeAddAccountModal();
-            showToast(`Đã thêm và kích hoạt tài khoản: ${email}`);
+            showToast(uiText(`Đã thêm và kích hoạt tài khoản: ${email}`, `Added and activated account: ${email}`));
             await forceRefreshAfterMutation();
         } else {
-            showToast('Không thể thêm tài khoản!', true);
+            showToast(uiText('Không thể thêm tài khoản!', 'Could not add the account!'), true);
         }
     } catch (err) {
         console.error('Add account error:', err);
-        showToast('Lỗi kết nối khi thêm tài khoản!', true);
+        showToast(uiText('Lỗi kết nối khi thêm tài khoản!', 'Connection error while adding the account!'), true);
     }
 }
 
 async function switchAccount(targetEmail) {
     try {
         await fetch(`/api/account/switch?email=${encodeURIComponent(targetEmail)}`, { method: 'POST' });
-        showToast(`Đã chuyển sang tài khoản: ${targetEmail}`);
+        showToast(uiText(`Đã chuyển sang tài khoản: ${targetEmail}`, `Switched to account: ${targetEmail}`));
         await forceRefreshAfterMutation();
     } catch (err) {
         console.error('Account switch error:', err);
@@ -2905,7 +2998,10 @@ async function switchAccount(targetEmail) {
 }
 
 async function deleteAccount(targetEmail) {
-    if (!confirm(`Bạn có chắc muốn xóa tài khoản ${targetEmail} khỏi danh bạ không?`)) return;
+    if (!confirm(uiText(
+        `Bạn có chắc muốn xóa tài khoản ${targetEmail} khỏi danh bạ không?`,
+        `Remove account ${targetEmail} from the saved list?`,
+    ))) return;
     try {
         const res = await fetch('/api/account/delete', {
             method: 'POST',
@@ -2913,7 +3009,7 @@ async function deleteAccount(targetEmail) {
             body: JSON.stringify({ email: targetEmail })
         });
         if (res.ok) {
-            showToast(`Đã xóa tài khoản: ${targetEmail}`);
+            showToast(uiText(`Đã xóa tài khoản: ${targetEmail}`, `Removed account: ${targetEmail}`));
             await forceRefreshAfterMutation();
         }
     } catch (err) {
@@ -3020,9 +3116,9 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     ));
 
     if (!data?.available || !windowData?.available || !rows.length) {
-        body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu cục bộ có Sol High trong cùng cửa sổ để so sánh.</td></tr>';
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText('Chưa đủ dữ liệu cục bộ có Sol High trong cùng cửa sổ để so sánh.', 'Not enough local data with Sol High in the same window for comparison.')}</td></tr>`;
         legend.innerHTML = '';
-        if (status) status.textContent = 'Cần ít nhất một khoảng đo của model và một khoảng đo Sol High trong cùng cửa sổ.';
+        if (status) status.textContent = uiText('Cần ít nhất một khoảng đo của model và một khoảng đo Sol High trong cùng cửa sổ.', 'At least one model interval and one Sol High interval are required in the same window.');
         const c = CanvasCharts.initCanvas(canvas);
         if (c) c.ctx.clearRect(0, 0, c.width, c.height);
         return;
@@ -3031,7 +3127,7 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     const modelKeys = [...rows.map(row => row.model_key)].sort();
     const colorFor = modelKey => THEME.palette[Math.max(0, modelKeys.indexOf(modelKey)) % THEME.palette.length];
     legend.innerHTML = [
-        `<button type="button" data-quota-model="all" class="${currentCodexQuotaTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">Tất cả (${rows.length})</button>`,
+        `<button type="button" data-quota-model="all" class="${currentCodexQuotaTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">${uiText(`Tất cả (${rows.length})`, `All (${rows.length})`)}</button>`,
         ...rows.map(row => {
             const color = colorFor(row.model_key);
             const active = currentCodexQuotaTimelineSelection !== null && currentCodexQuotaTimelineSelection.has(row.model_key);
@@ -3056,7 +3152,11 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     CanvasCharts.drawQuotaRatioTimeline(canvas, dates.map(quotaTimelineDateLabel), datasets);
 
     const generatedAt = Date.parse(data.generated_at || '');
-    const confidenceLabel = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+    const confidenceLabel = {
+        low: uiText('Thấp', 'Low'),
+        medium: uiText('Vừa', 'Medium'),
+        high: uiText('Cao', 'High'),
+    };
     body.innerHTML = rows.map(row => {
         const latest = row.latest || {};
         const previous = row.previous || {};
@@ -3071,8 +3171,8 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         const stale = Number.isFinite(ageHours) && ageHours > windowDays * 24;
         const confidenceKey = ['low', 'medium', 'high'].includes(latest.confidence) ? latest.confidence : 'low';
         const confidence = confidenceLabel[confidenceKey];
-        const modelConfidence = confidenceLabel[latest.model_confidence] || 'Thấp';
-        const baselineConfidence = confidenceLabel[latest.baseline_confidence] || 'Thấp';
+        const modelConfidence = confidenceLabel[latest.model_confidence] || confidenceLabel.low;
+        const baselineConfidence = confidenceLabel[latest.baseline_confidence] || confidenceLabel.low;
         return `<tr>
             <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
             <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(latestValue) ? latestValue.toFixed(2) + '×' : '—'}</strong></td>
@@ -3081,16 +3181,22 @@ function renderCodexQuotaEfficiencyTimeline(data) {
             <td class="num">${Number.isFinite(tokensPerPct) ? formatNumber(Math.round(tokensPerPct)) : '—'}</td>
             <td class="num">${formatNumber(Number(latest.sample_count || 0))} / ${formatNumber(Number(latest.baseline_sample_count || 0))}</td>
             <td title="Model: ${escapeHtml(modelConfidence)} · Sol High: ${escapeHtml(baselineConfidence)}"><span class="quota-confidence-${confidenceKey}">${escapeHtml(confidence)}</span></td>
-            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? '<span class="quota-recent-stale"> · dữ liệu cũ</span>' : ''}</td>
+            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? `<span class="quota-recent-stale"> · ${uiText('dữ liệu cũ', 'stale data')}</span>` : ''}</td>
         </tr>`;
     }).join('');
 
     if (status) {
         const visiblePoints = rows.reduce((sum, row) => sum + row.points.length, 0);
-        status.textContent = `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh cục bộ.`;
+        status.textContent = uiText(
+            `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh cục bộ.`,
+            `${rangeDays} days · ${windowDays}-day rolling median · ${formatNumber(Number(data.interval_count || 0))} valid intervals · ${formatNumber(visiblePoints)} local comparison points.`,
+        );
     }
     if (note) {
-        note.textContent = 'Mỗi điểm lấy median của các khoảng đo gần đó và chỉ dùng Sol High trong cùng cửa sổ làm mốc. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Độ tin cậy dựa trên số mẫu, số phiên và quota span của cả hai bên. Cửa sổ 1 ngày nhạy hơn; 7 ngày ổn định hơn. Đây không phải trọng số chính thức của OpenAI.';
+        note.textContent = uiText(
+            'Mỗi điểm lấy median của các khoảng đo gần đó và chỉ dùng Sol High trong cùng cửa sổ làm mốc. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Độ tin cậy dựa trên số mẫu, số phiên và quota span của cả hai bên. Cửa sổ 1 ngày nhạy hơn; 7 ngày ổn định hơn. Đây không phải trọng số chính thức của OpenAI.',
+            'Each point is the median of nearby measurement intervals and uses only Sol High from the same window as the baseline. >1× means the model burns the 5-hour quota faster for the same raw-token volume. Confidence depends on samples, independent sessions, and observed quota span on both sides. A 1-day window is more sensitive; 7 days is more stable. This is not an official OpenAI weighting.',
+        );
     }
 }
 
@@ -3142,10 +3248,16 @@ function renderCodexQuotaPerTaskTimeline(data) {
     ));
 
     if (!data?.available || !windowData?.available || !rows.length) {
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ ít nhất ${formatNumber(minimumTasks)} task của model và Sol High trong cùng cửa sổ để so sánh.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText(
+            `Chưa đủ ít nhất ${formatNumber(minimumTasks)} task của model và Sol High trong cùng cửa sổ để so sánh.`,
+            `Not enough data: at least ${formatNumber(minimumTasks)} tasks are required for both the model and Sol High in the same window.`,
+        )}</td></tr>`;
         legend.innerHTML = '';
         if (status) {
-            status.textContent = `Đã có ${formatNumber(Number(data?.task_sample_count || 0))} task hợp lệ; mỗi điểm cần tối thiểu ${formatNumber(minimumTasks)} task của model và ${formatNumber(minimumTasks)} task Sol High trong cùng cửa sổ.`;
+            status.textContent = uiText(
+                `Đã có ${formatNumber(Number(data?.task_sample_count || 0))} task hợp lệ; mỗi điểm cần tối thiểu ${formatNumber(minimumTasks)} task của model và ${formatNumber(minimumTasks)} task Sol High trong cùng cửa sổ.`,
+                `${formatNumber(Number(data?.task_sample_count || 0))} valid tasks are available; each point requires at least ${formatNumber(minimumTasks)} model tasks and ${formatNumber(minimumTasks)} Sol High tasks in the same window.`,
+            );
         }
         const c = CanvasCharts.initCanvas(canvas);
         if (c) c.ctx.clearRect(0, 0, c.width, c.height);
@@ -3155,7 +3267,7 @@ function renderCodexQuotaPerTaskTimeline(data) {
     const modelKeys = [...rows.map(row => row.model_key)].sort();
     const colorFor = modelKey => THEME.palette[Math.max(0, modelKeys.indexOf(modelKey)) % THEME.palette.length];
     legend.innerHTML = [
-        `<button type="button" data-task-quota-model="all" class="${currentCodexTaskTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">Tất cả (${rows.length})</button>`,
+        `<button type="button" data-task-quota-model="all" class="${currentCodexTaskTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">${uiText(`Tất cả (${rows.length})`, `All (${rows.length})`)}</button>`,
         ...rows.map(row => {
             const color = colorFor(row.model_key);
             const active = currentCodexTaskTimelineSelection !== null && currentCodexTaskTimelineSelection.has(row.model_key);
@@ -3179,7 +3291,11 @@ function renderCodexQuotaPerTaskTimeline(data) {
     });
     CanvasCharts.drawQuotaRatioTimeline(canvas, dates.map(quotaTimelineDateLabel), datasets);
 
-    const confidenceLabel = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+    const confidenceLabel = {
+        low: uiText('Thấp', 'Low'),
+        medium: uiText('Vừa', 'Medium'),
+        high: uiText('Cao', 'High'),
+    };
     const generatedAt = Date.parse(data.generated_at || '');
     body.innerHTML = rows.map(row => {
         const latest = row.latest || {};
@@ -3195,7 +3311,7 @@ function renderCodexQuotaPerTaskTimeline(data) {
         const observedAt = latest.last_observed_at;
         const ageHours = Number.isFinite(generatedAt) && observedAt ? (generatedAt - Date.parse(observedAt)) / 3600000 : NaN;
         const stale = Number.isFinite(ageHours) && ageHours > windowDays * 24;
-        const confidence = confidenceLabel[latest.confidence] || 'Thấp';
+        const confidence = confidenceLabel[latest.confidence] || confidenceLabel.low;
         return `<tr>
             <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
             <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(estimated) ? estimated.toFixed(2) + '%' : '—'}</strong></td>
@@ -3205,16 +3321,22 @@ function renderCodexQuotaPerTaskTimeline(data) {
             <td class="num">${Number.isFinite(tokensPerTask) ? formatNumber(Math.round(tokensPerTask)) : '—'}</td>
             <td class="num">${formatNumber(Number(latest.task_count || 0))} / ${formatNumber(Number(latest.baseline_task_count || 0))}</td>
             <td>${Number.isFinite(coverage) ? (coverage * 100).toFixed(0) + '%' : '—'} · ${escapeHtml(confidence)}</td>
-            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? '<span class="quota-recent-stale"> · dữ liệu cũ</span>' : ''}</td>
+            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? `<span class="quota-recent-stale"> · ${uiText('dữ liệu cũ', 'stale data')}</span>` : ''}</td>
         </tr>`;
     }).join('');
 
     if (status) {
         const visiblePoints = rows.reduce((sum, row) => sum + row.points.length, 0);
-        status.textContent = `${rangeDays} ngày · median trượt ${windowDays} ngày · tối thiểu ${minimumTasks} task mỗi bên · ${formatNumber(Number(data.task_sample_count || 0))} task hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh.`;
+        status.textContent = uiText(
+            `${rangeDays} ngày · median trượt ${windowDays} ngày · tối thiểu ${minimumTasks} task mỗi bên · ${formatNumber(Number(data.task_sample_count || 0))} task hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh.`,
+            `${rangeDays} days · ${windowDays}-day rolling median · minimum ${minimumTasks} tasks per side · ${formatNumber(Number(data.task_sample_count || 0))} valid tasks · ${formatNumber(visiblePoints)} comparison points.`,
+        );
     }
     if (note) {
-        note.textContent = 'Mỗi điểm dùng median %5h/task của các task hoàn tất gần đó và so với Sol High trong cùng cửa sổ. >1× nghĩa là model tiêu hao nhiều quota hơn cho một task gần đây. Tokens/task và số mẫu giúp nhận ra khi độ khó hoặc kích thước task thay đổi. Đây là số đo thực nghiệm từ log cục bộ.';
+        note.textContent = uiText(
+            'Mỗi điểm dùng median %5h/task của các task hoàn tất gần đó và so với Sol High trong cùng cửa sổ. >1× nghĩa là model tiêu hao nhiều quota hơn cho một task gần đây. Tokens/task và số mẫu giúp nhận ra khi độ khó hoặc kích thước task thay đổi. Đây là số đo thực nghiệm từ log cục bộ.',
+            'Each point uses the median 5h-quota percentage per completed task nearby and compares it with Sol High in the same window. >1× means the model consumed more quota for a recent task. Tokens/task and sample count help reveal changes in task size or difficulty. This is an empirical local-log measurement.',
+        );
     }
 }
 
@@ -3241,35 +3363,44 @@ function renderCodexQuotaEfficiency(quotaEfficiency) {
 
     const rows = Array.isArray(quotaEfficiency?.models) ? quotaEfficiency.models : [];
     if (!quotaEfficiency?.available || rows.length === 0) {
-        body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu để ước tính hiệu suất hạn mức Codex 5h.</td></tr>';
+        body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText('Chưa đủ dữ liệu để ước tính hiệu suất hạn mức Codex 5h.', 'Insufficient data to estimate Codex 5h quota efficiency.')}</td></tr>`;
         if (note) {
-            note.textContent = 'Cần ít nhất một khoảng đo hợp lệ có thay đổi từ 2% hạn mức trở lên trong cùng phiên, cùng model và cùng chu kỳ reset 5h.';
+            note.textContent = uiText(
+                'Cần ít nhất một khoảng đo hợp lệ có thay đổi từ 2% hạn mức trở lên trong cùng phiên, cùng model và cùng chu kỳ reset 5h.',
+                'At least one valid interval is required with a quota change of 2% or more in the same session, model, and 5-hour reset cycle.',
+            );
         }
         return;
     }
 
     const confidenceLabel = {
-        low: 'Thấp',
-        medium: 'Vừa',
-        high: 'Cao',
+        low: uiText('Thấp', 'Low'),
+        medium: uiText('Vừa', 'Medium'),
+        high: uiText('Cao', 'High'),
     };
     body.innerHTML = rows.map(row => {
         const tokensPerPct = Number(row.tokens_per_quota_pct);
         const pctPerMillion = Number(row.quota_pct_per_1m_tokens);
         const relative = Number(row.relative_quota_burn_vs_sol_high);
         const hasRelative = Number.isFinite(relative) && relative > 0;
-        const confidence = confidenceLabel[row.confidence] || String(row.confidence || 'Thấp');
+        const confidence = confidenceLabel[row.confidence] || confidenceLabel.low;
         const modelName = escapeHtml(row.model_key || row.model_id || 'Unknown');
         const relativeText = hasRelative ? `${relative.toFixed(2)}×` : '—';
         const relativeTitle = hasRelative
             ? (relative > 1
-                ? `Ước tính đốt hạn mức nhanh hơn Sol High ${relative.toFixed(2)} lần trên cùng số raw token.`
-                : `Ước tính đốt hạn mức bằng ${relative.toFixed(2)} lần Sol High trên cùng số raw token.`)
-            : 'Chưa có baseline Sol High đủ dữ liệu.';
+                ? uiText(
+                    `Ước tính đốt hạn mức nhanh hơn Sol High ${relative.toFixed(2)} lần trên cùng số raw token.`,
+                    `Estimated quota burn is ${relative.toFixed(2)}× Sol High for the same raw-token volume.`,
+                )
+                : uiText(
+                    `Ước tính đốt hạn mức bằng ${relative.toFixed(2)} lần Sol High trên cùng số raw token.`,
+                    `Estimated quota burn is ${relative.toFixed(2)}× Sol High for the same raw-token volume.`,
+                ))
+            : uiText('Chưa có baseline Sol High đủ dữ liệu.', 'No sufficiently sampled Sol High baseline is available.');
         return `
             <tr>
                 <td style="font-weight:600;color:#e2e8f0;">${modelName}</td>
-                <td class="num" title="Median raw tokens tiêu thụ cho mỗi 1 điểm phần trăm hạn mức 5h.">${Number.isFinite(tokensPerPct) ? formatNumber(Math.round(tokensPerPct)) : '—'}</td>
+                <td class="num" title="${uiText('Median raw tokens tiêu thụ cho mỗi 1 điểm phần trăm hạn mức 5h.', 'Median raw tokens consumed per one percentage point of the 5-hour quota.')}">${Number.isFinite(tokensPerPct) ? formatNumber(Math.round(tokensPerPct)) : '—'}</td>
                 <td class="num">${Number.isFinite(pctPerMillion) ? pctPerMillion.toFixed(2) + '%' : '—'}</td>
                 <td class="num" title="${escapeHtml(relativeTitle)}">${relativeText}</td>
                 <td class="num">${Number(row.quota_span_pct || 0).toFixed(1)}% / ${formatNumber(Number(row.session_count || 0))}</td>
@@ -3282,7 +3413,10 @@ function renderCodexQuotaEfficiency(quotaEfficiency) {
     if (note) {
         const observations = Number(quotaEfficiency.observation_count || 0);
         const intervals = Number(quotaEfficiency.interval_count || 0);
-        note.textContent = `Đo thực nghiệm từ log Codex cục bộ: ${formatNumber(observations)} snapshot, ${formatNumber(intervals)} khoảng đo hợp lệ. >1× nghĩa là model tiêu hao hạn mức 5h nhanh hơn Sol High trên cùng số raw token. Đây không phải công thức trọng số chính thức của OpenAI.`;
+        note.textContent = uiText(
+            `Đo thực nghiệm từ log Codex cục bộ: ${formatNumber(observations)} snapshot, ${formatNumber(intervals)} khoảng đo hợp lệ. >1× nghĩa là model tiêu hao hạn mức 5h nhanh hơn Sol High trên cùng số raw token. Đây không phải công thức trọng số chính thức của OpenAI.`,
+            `Empirical measurement from local Codex logs: ${formatNumber(observations)} snapshots and ${formatNumber(intervals)} valid intervals. >1× means the model consumes the 5-hour quota faster than Sol High for the same raw-token volume. This is not an official OpenAI weighting formula.`,
+        );
     }
 }
 
@@ -3292,14 +3426,21 @@ function renderCodexQuotaPerTask(data) {
     if (!body) return;
     const rows = Array.isArray(data?.models) ? data.models : [];
     if (!data?.available || !rows.length) {
-        body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu task hoàn tất để ước tính mức tiêu hao 5h theo task.</td></tr>';
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText('Chưa đủ dữ liệu task hoàn tất để ước tính mức tiêu hao 5h theo task.', 'Insufficient completed-task data to estimate 5-hour quota consumption per task.')}</td></tr>`;
         if (note) {
-            note.textContent = 'Cần một task hoàn tất, dùng một model trong cùng chu kỳ reset 5h, có ít nhất hai snapshot quota và độ phủ token từ 25%.';
+            note.textContent = uiText(
+                'Cần một task hoàn tất, dùng một model trong cùng chu kỳ reset 5h, có ít nhất hai snapshot quota và độ phủ token từ 25%.',
+                'A completed task must use one model within a single 5-hour reset cycle, include at least two quota snapshots, and have at least 25% token coverage.',
+            );
         }
         return;
     }
 
-    const confidenceLabel = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+    const confidenceLabel = {
+        low: uiText('Thấp', 'Low'),
+        medium: uiText('Vừa', 'Medium'),
+        high: uiText('Cao', 'High'),
+    };
     body.innerHTML = rows.map(row => {
         const estimated = Number(row.estimated_quota_pct_per_task);
         const observed = Number(row.observed_quota_pct_per_task);
@@ -3309,19 +3450,25 @@ function renderCodexQuotaPerTask(data) {
         const hasRelative = Number.isFinite(relative) && relative > 0;
         const relativeTitle = hasRelative
             ? (relative > 1
-                ? `Ước tính task tiêu hao hạn mức nhiều hơn Sol High ${relative.toFixed(2)} lần.`
-                : `Ước tính task tiêu hao ${relative.toFixed(2)} lần hạn mức của Sol High.`)
-            : 'Chưa có baseline Sol High đủ dữ liệu.';
+                ? uiText(
+                    `Ước tính task tiêu hao hạn mức nhiều hơn Sol High ${relative.toFixed(2)} lần.`,
+                    `Estimated quota consumption per task is ${relative.toFixed(2)}× Sol High.`,
+                )
+                : uiText(
+                    `Ước tính task tiêu hao ${relative.toFixed(2)} lần hạn mức của Sol High.`,
+                    `Estimated quota consumption per task is ${relative.toFixed(2)}× Sol High.`,
+                ))
+            : uiText('Chưa có baseline Sol High đủ dữ liệu.', 'No sufficiently sampled Sol High baseline is available.');
         return `
             <tr>
                 <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
-                <td class="num" title="Ngoại suy từ phần quota quan sát được theo độ phủ token của task.">${Number.isFinite(estimated) ? estimated.toFixed(2) + '%' : '—'}</td>
-                <td class="num" title="Median thay đổi quota giữa snapshot đầu và cuối trong task.">${Number.isFinite(observed) ? observed.toFixed(2) + '%' : '—'}</td>
+                <td class="num" title="${uiText('Ngoại suy từ phần quota quan sát được theo độ phủ token của task.', 'Extrapolated from the observed quota change using the task token-coverage ratio.')}">${Number.isFinite(estimated) ? estimated.toFixed(2) + '%' : '—'}</td>
+                <td class="num" title="${uiText('Median thay đổi quota giữa snapshot đầu và cuối trong task.', 'Median quota change between the first and last snapshots in the task.')}">${Number.isFinite(observed) ? observed.toFixed(2) + '%' : '—'}</td>
                 <td class="num">${Number.isFinite(tokens) ? formatNumber(Math.round(tokens)) : '—'}</td>
                 <td class="num">${Number.isFinite(coverage) ? (coverage * 100).toFixed(0) + '%' : '—'}</td>
                 <td class="num" title="${escapeHtml(relativeTitle)}">${hasRelative ? relative.toFixed(2) + '×' : '—'}</td>
                 <td class="num">${formatNumber(Number(row.task_count || 0))} / ${formatNumber(Number(row.session_count || 0))}</td>
-                <td><span style="font-weight:600;">${escapeHtml(confidenceLabel[row.confidence] || String(row.confidence || 'Thấp'))}</span></td>
+                <td><span style="font-weight:600;">${escapeHtml(confidenceLabel[row.confidence] || confidenceLabel.low)}</span></td>
             </tr>
         `;
     }).join('');
@@ -3332,15 +3479,21 @@ function renderCodexQuotaPerTask(data) {
         const reset = Number(data.excluded_cross_cycle_tasks || 0);
         const insufficient = Number(data.excluded_insufficient_tasks || 0);
         const lowCoverage = Number(data.excluded_low_coverage_tasks || 0);
-        note.textContent = `Đo thực nghiệm từ ${formatNumber(sampled)} task hoàn tất. %5h/task được ngoại suy theo độ phủ token; đã loại ${formatNumber(mixed)} task đổi model, ${formatNumber(reset)} task qua mốc reset, ${formatNumber(insufficient)} task thiếu biến động/snapshot và ${formatNumber(lowCoverage)} task có coverage thấp. Đây không phải công thức chính thức của OpenAI.`;
+        note.textContent = uiText(
+            `Đo thực nghiệm từ ${formatNumber(sampled)} task hoàn tất. %5h/task được ngoại suy theo độ phủ token; đã loại ${formatNumber(mixed)} task đổi model, ${formatNumber(reset)} task qua mốc reset, ${formatNumber(insufficient)} task thiếu biến động/snapshot và ${formatNumber(lowCoverage)} task có coverage thấp. Đây không phải công thức chính thức của OpenAI.`,
+            `Empirical measurement from ${formatNumber(sampled)} completed tasks. %5h/task is extrapolated by token coverage; ${formatNumber(mixed)} model-switching tasks, ${formatNumber(reset)} cross-reset tasks, ${formatNumber(insufficient)} tasks without enough quota movement/snapshots, and ${formatNumber(lowCoverage)} low-coverage tasks were excluded. This is not an official OpenAI formula.`,
+        );
     }
 }
 
-const MODEL_TIMELINE_GRANULARITY_LABELS = {
-    day: 'Theo ngày',
-    month: 'Theo tháng',
-    year: 'Theo năm',
-};
+function modelTimelineGranularityLabel(granularity) {
+    const labels = {
+        day: uiText('Theo ngày', 'By day'),
+        month: uiText('Theo tháng', 'By month'),
+        year: uiText('Theo năm', 'By year'),
+    };
+    return labels[granularity] || labels.day;
+}
 
 function aggregateModelTimeline(timelineData, granularity = currentModelTimelineGranularity) {
     if (!timelineData || granularity === 'day') return timelineData;
@@ -3359,7 +3512,9 @@ function aggregateModelTimeline(timelineData, granularity = currentModelTimeline
         if (!bucketIndexes.has(bucketKey)) {
             bucketIndexes.set(bucketKey, bucketKeys.length);
             bucketKeys.push(bucketKey);
-            bucketLabels.push(granularity === 'year' ? year : `T${month}/${year}`);
+            bucketLabels.push(granularity === 'year'
+                ? year
+                : (uiLanguage() === 'en' ? `${year}-${month}` : `T${month}/${year}`));
         }
         dayToBucket[dayIndex] = bucketIndexes.get(bucketKey);
     });
@@ -3407,15 +3562,17 @@ function sizeModelTimelineStage(scrollId, stageId, bucketCount) {
 
 function formatTimelineRangeText(timelineData) {
     const range = timelineData?.range || {};
-    const granularityLabel = MODEL_TIMELINE_GRANULARITY_LABELS[currentModelTimelineGranularity] || 'Theo ngày';
+    const granularityLabel = modelTimelineGranularityLabel(currentModelTimelineGranularity);
     if (range.mode === 'custom' && range.start_date && range.end_date) {
         const formatDateKey = key => {
             const parts = String(key).split('-');
-            return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : key;
+            if (parts.length !== 3) return key;
+            return uiLanguage() === 'en' ? `${parts[1]}/${parts[2]}/${parts[0]}` : `${parts[2]}/${parts[1]}/${parts[0]}`;
         };
         return `(${formatDateKey(range.start_date)} – ${formatDateKey(range.end_date)} · ${granularityLabel})`;
     }
-    return `(${range.days || timelineData?.dates?.length || 0} ngày qua · ${granularityLabel})`;
+    const days = range.days || timelineData?.dates?.length || 0;
+    return uiText(`(${days} ngày qua · ${granularityLabel})`, `(${days} days · ${granularityLabel})`);
 }
 
 function renderModelsDailyChart(timelineData) {
@@ -3433,7 +3590,7 @@ function renderModelsDailyChart(timelineData) {
         const allModels = timelineData.models;
         let legendHtml = `
             <button class="legend-btn ${currentModelTimelineSelection === null ? 'active' : ''}" onclick="filterModelDailyChart('all')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${currentModelTimelineSelection === null ? 'var(--cyan-400)' : 'rgba(255,255,255,0.1)'};background:${currentModelTimelineSelection === null ? 'rgba(6,182,212,0.15)' : 'transparent'};color:${currentModelTimelineSelection === null ? '#06b6d4' : 'var(--text-muted)'};transition:all 0.2s;">
-                Tất cả (${allModels.length})
+                ${uiText(`Tất cả (${allModels.length})`, `All (${allModels.length})`)}
             </button>
         `;
         allModels.forEach(m => {
@@ -3482,21 +3639,27 @@ function renderModelsCostChart(timelineData) {
     if (coverageLabel) {
         const coverageParts = [];
         if (proxyModels.length) {
-            coverageParts.push(`${proxyModels.length} model dùng proxy giá GPT-5.6 Sol Thinking`);
+            coverageParts.push(uiText(
+                `${proxyModels.length} model dùng proxy giá GPT-5.6 Sol Thinking`,
+                `${proxyModels.length} model${proxyModels.length === 1 ? '' : 's'} ${proxyModels.length === 1 ? 'uses' : 'use'} GPT-5.6 Sol Thinking as a pricing proxy`,
+            ));
         }
         if (unknownModels.length) {
-            coverageParts.push(`${unknownModels.length} model có usage chưa định giá; phần đó không được tính thành $0`);
+            coverageParts.push(uiText(
+                `${unknownModels.length} model có usage chưa định giá; phần đó không được tính thành $0`,
+                `${unknownModels.length} model${unknownModels.length === 1 ? '' : 's'} ${unknownModels.length === 1 ? 'has' : 'have'} unpriced usage; that usage is not counted as $0`,
+            ));
         }
         coverageLabel.textContent = coverageParts.length
             ? coverageParts.join(' • ') + '.'
-            : 'Toàn bộ usage trong khoảng đang có giá ước tính.';
+            : uiText('Toàn bộ usage trong khoảng đang có giá ước tính.', 'All usage in this range currently has an estimated price.');
         coverageLabel.style.color = unknownModels.length ? '#fbbf24' : '#86efac';
     }
 
     if (legendContainer) {
         let legendHtml = `
             <button class="legend-btn ${currentModelTimelineSelection === null ? 'active' : ''}" onclick="filterModelDailyChart('all')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${currentModelTimelineSelection === null ? 'var(--cyan-400)' : 'rgba(255,255,255,0.1)'};background:${currentModelTimelineSelection === null ? 'rgba(6,182,212,0.15)' : 'transparent'};color:${currentModelTimelineSelection === null ? '#06b6d4' : 'var(--text-muted)'};transition:all 0.2s;">
-                Tất cả (${allModels.length})
+                ${uiText(`Tất cả (${allModels.length})`, `All (${allModels.length})`)}
             </button>
         `;
         allModels.forEach(m => {
@@ -3509,7 +3672,10 @@ function renderModelsCostChart(timelineData) {
             const incompleteMark = m.cost_complete ? '' : ' + ?';
             const estimatedMark = m.pricing_estimated === true ? ' ~' : '';
             const pricingTitle = m.pricing_estimated === true
-                ? escapeHtml(m.pricing_note || `Ước tính theo ${m.pricing_basis_model || 'GPT-5.6 Sol Thinking'}`)
+                ? escapeHtml(m.pricing_note || uiText(
+                    `Ước tính theo ${m.pricing_basis_model || 'GPT-5.6 Sol Thinking'}`,
+                    `Estimated using ${m.pricing_basis_model || 'GPT-5.6 Sol Thinking'} pricing`,
+                ))
                 : '';
             legendHtml += `
                 <button class="legend-btn ${isActive ? 'active' : ''}" onclick="filterModelDailyChart('${escapeHtml(m.name).replace(/'/g, "\\'")}')" title="${pricingTitle}" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${isActive ? color : 'rgba(255,255,255,0.08)'};background:${isActive ? color + '22' : 'transparent'};color:${isActive ? color : '#cbd5e1'};display:flex;align-items:center;gap:6px;transition:all 0.2s;">
@@ -3621,21 +3787,21 @@ function initModelTimelineRangeControls() {
         const start = startInput.value;
         const end = endInput.value;
         if (!start || !end) {
-            showToast('Vui lòng chọn đủ ngày bắt đầu và ngày kết thúc.', true);
+            showToast(uiText('Vui lòng chọn đủ ngày bắt đầu và ngày kết thúc.', 'Select both a start date and an end date.'), true);
             return;
         }
         if (start > end) {
-            showToast('Ngày kết thúc phải bằng hoặc sau ngày bắt đầu.', true);
+            showToast(uiText('Ngày kết thúc phải bằng hoặc sau ngày bắt đầu.', 'The end date must be on or after the start date.'), true);
             return;
         }
         if (end > todayKey) {
-            showToast('Ngày kết thúc không được nằm trong tương lai.', true);
+            showToast(uiText('Ngày kết thúc không được nằm trong tương lai.', 'The end date cannot be in the future.'), true);
             return;
         }
 
         const dayCount = Math.floor((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000) + 1;
         if (!Number.isFinite(dayCount) || dayCount < 1 || dayCount > 366) {
-            showToast('Khoảng thời gian tùy chọn tối đa là 366 ngày.', true);
+            showToast(uiText('Khoảng thời gian tùy chọn tối đa là 366 ngày.', 'The custom date range can be at most 366 days.'), true);
             return;
         }
 
@@ -3744,33 +3910,39 @@ function renderModelsSummaryCards(breakdown, codexUsage) {
         .filter(([path]) => String(path).toLowerCase().includes('archived_sessions'))
         .reduce((sum, [, count]) => sum + Number(count || 0), 0);
     const ledgerCoverage = rootCounts.length
-        ? ` • sổ cái ${activeLogCount} active + ${archivedLogCount} archived log; không lọc ngày; định giá theo rate hiện hành`
-        : ' • all-time, không lọc ngày; định giá theo rate hiện hành';
+        ? uiText(
+            ` • sổ cái ${activeLogCount} active + ${archivedLogCount} archived log; không lọc ngày; định giá theo rate hiện hành`,
+            ` • ledger: ${activeLogCount} active + ${archivedLogCount} archived logs; no date filter; priced using current rates`,
+        )
+        : uiText(' • all-time, không lọc ngày; định giá theo rate hiện hành', ' • all-time, no date filter; priced using current rates');
 
     const cards = [
         {
             icon: '📊', cls: 'indigo', cardCls: 'c-indigo',
-            label: 'Tổng Models Đang Theo Dõi',
+            label: uiText('Tổng Models Đang Theo Dõi', 'Models Tracked'),
             value: totalModels,
             sub: `AGY: ${agiModels.length} • Codex: ${codexModels.length}`
         },
         {
             icon: '🔢', cls: 'cyan', cardCls: 'c-cyan',
-            label: 'Tokens Theo Nguồn (Không Cộng Chéo)',
+            label: uiText('Tokens Theo Nguồn (Không Cộng Chéo)', 'Tokens by Source (No Double Counting)'),
             value: `<span style="display:block;">AGY estimated: ${formatNumber(agyTotalTokens)}</span><span style="display:block;">Codex exact: ${formatNumber(codexExactTokens)}</span>${codexManualModels.length ? `<span style="display:block;font-size:0.72em;">Codex manual: ${formatNumber(codexManualTokens)}</span>` : ''}`,
-            sub: 'AGY transcript-estimated • Codex exact session-log tokens • manual fallback tách riêng'
+            sub: uiText(
+                'AGY transcript-estimated • Codex exact session-log tokens • manual fallback tách riêng',
+                'AGY transcript-estimated • Codex exact session-log tokens • manual fallback kept separate',
+            )
         },
         {
             icon: '💵', cls: 'emerald', cardCls: 'c-emerald',
-            label: 'Tổng Chi Phí Ước Tính (All-Time)',
+            label: uiText('Tổng Chi Phí Ước Tính (All-Time)', 'Estimated Cost (All-Time)'),
             value: '$' + totalCostAll.toFixed(2),
-            sub: `AGY: $${agiModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)} • Codex: $${codexModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)}${proxyPricedModels.length ? ` • ${proxyPricedModels.length} model dùng proxy GPT-5.6 Sol Thinking` : ''}${unpricedModels.length ? ` • ${unpricedModels.length} model chưa có giá` : ''}${ledgerCoverage}`
+            sub: `AGY: $${agiModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)} • Codex: $${codexModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)}${proxyPricedModels.length ? uiText(` • ${proxyPricedModels.length} model dùng proxy GPT-5.6 Sol Thinking`, ` • ${proxyPricedModels.length} proxy-priced model${proxyPricedModels.length === 1 ? '' : 's'} using GPT-5.6 Sol Thinking`) : ''}${unpricedModels.length ? uiText(` • ${unpricedModels.length} model chưa có giá`, ` • ${unpricedModels.length} unpriced model${unpricedModels.length === 1 ? '' : 's'}`) : ''}${ledgerCoverage}`
         },
         {
             icon: '🏆', cls: 'amber', cardCls: 'c-amber',
-            label: 'Model Tốn Nhiều Token Nhất',
+            label: uiText('Model Tốn Nhiều Token Nhất', 'Highest-Token Model'),
             value: topModel ? topModel.model_id : '—',
-            sub: topModel ? `${formatNumber(topModel.total_tokens)} tokens • ${topModel.cost_known === false ? 'chi phí —' : (topModel.pricing_estimated === true ? '~$' : '$') + topModel.total_cost_usd.toFixed(2)}` : ''
+            sub: topModel ? `${formatNumber(topModel.total_tokens)} tokens • ${topModel.cost_known === false ? uiText('chi phí —', 'cost —') : (topModel.pricing_estimated === true ? '~$' : '$') + topModel.total_cost_usd.toFixed(2)}` : ''
         }
     ];
 
@@ -3799,14 +3971,14 @@ function renderTokenCostPeriod(tokens, costUsd, costKnown, tokenColor, estimated
     const tokenValue = Math.max(0, Number(tokens) || 0);
     const costValue = Math.max(0, Number(costUsd) || 0);
     const digits = costValue >= 100 ? 2 : (costValue >= 1 ? 3 : 4);
-    const costText = costKnown === false ? 'Chi phí: —' : `${estimated ? '~' : ''}$${costValue.toFixed(digits)}`;
+    const costText = costKnown === false ? uiText('Chi phí: —', 'Cost: —') : `${estimated ? '~' : ''}$${costValue.toFixed(digits)}`;
     return `<strong style="display:block;color:${tokenColor};">${formatNumber(tokenValue)}</strong>` +
         `<span class="period-cost-value">${costText}</span>${pricingBasisHtml}`;
 }
 
 function renderFooterPeriodCost(costUsd, unknownCount) {
     return `<span class="period-cost-value">$${Number(costUsd || 0).toFixed(2)}</span>` +
-        (unknownCount ? `<span style="display:block;font-size:0.68rem;color:var(--text-muted);">+ ${unknownCount} chưa định giá</span>` : '');
+        (unknownCount ? `<span style="display:block;font-size:0.68rem;color:var(--text-muted);">+ ${unknownCount} ${uiText('chưa định giá', 'unpriced')}</span>` : '');
 }
 
 function renderModelsTable(breakdown) {
@@ -3841,18 +4013,18 @@ function renderModelsTable(breakdown) {
 
     const sourceBadge = (sourceKind, platform) => {
         if (sourceKind === 'automatic') {
-            return '<span class="model-source-badge badge-auto" title="Tự động quét từ local logs / transcripts">⚡ Tự động (Logs)</span>';
+            return `<span class="model-source-badge badge-auto" title="${uiText('Tự động quét từ local logs / transcripts', 'Automatically scanned from local logs / transcripts')}">${uiText('⚡ Tự động (Logs)', '⚡ Automatic (Logs)')}</span>`;
         }
         if (sourceKind === 'manual_fallback' || platform === 'Codex') {
-            return '<span class="model-source-badge badge-manual" title="Dữ liệu nhập thủ công (Manual fallback)">📝 Thủ công (Fallback)</span>';
+            return `<span class="model-source-badge badge-manual" title="${uiText('Dữ liệu nhập thủ công (Manual fallback)', 'Manually entered data (fallback)')}">${uiText('📝 Thủ công (Fallback)', '📝 Manual (Fallback)')}</span>`;
         }
-        return '<span class="model-source-badge badge-auto">⚡ Tự động</span>';
+        return `<span class="model-source-badge badge-auto">${uiText('⚡ Tự động', '⚡ Automatic')}</span>`;
     };
 
     const quotaBar = (pct, wkUsed, wkLimit, quotaMeta = {}) => {
         const numericPct = (pct === null || pct === undefined || pct === '') ? NaN : Number(pct);
-        const sourceLabel = quotaMeta.weekly_quota_pct_label || quotaMeta.weekly_quota_basis || 'Weekly denominator unavailable';
-        const titleText = `${formatNumber(wkUsed || 0)} / ${formatNumber(wkLimit || 0)} tokens (7 ngày qua) • ${sourceLabel}`;
+        const sourceLabel = tr(quotaMeta.weekly_quota_pct_label || quotaMeta.weekly_quota_basis || 'Weekly denominator unavailable');
+        const titleText = `${formatNumber(wkUsed || 0)} / ${formatNumber(wkLimit || 0)} tokens ${uiText('(7 ngày qua)', '(last 7 days)')} • ${sourceLabel}`;
         if (!Number.isFinite(numericPct)) {
             return `<div class="quota-mini-bar quota-unavailable" title="${escapeHtml(titleText)}" aria-label="${escapeHtml(sourceLabel)}">
                 <span class="quota-mini-label">—</span>
@@ -3864,7 +4036,7 @@ function renderModelsTable(breakdown) {
         if (clamped > 80) barColor = 'var(--rose-400)';
         else if (clamped > 50) barColor = 'var(--amber-400)';
         else if (clamped > 25) barColor = 'var(--cyan-400)';
-        const estimateTag = quotaMeta.weekly_quota_pct_is_estimate ? ' • estimate' : '';
+        const estimateTag = quotaMeta.weekly_quota_pct_is_estimate ? ` • ${uiText('ước tính', 'estimate')}` : '';
         return `<div class="quota-mini-bar" title="${titleText}">
             <div class="quota-mini-fill" style="width:${clamped}%;background:${barColor};"></div>
             <span class="quota-mini-label">${clamped.toFixed(1)}%${estimateTag}</span>
@@ -3880,11 +4052,11 @@ function renderModelsTable(breakdown) {
         const wkToks = m.weekly_tokens !== undefined ? m.weekly_tokens : m.total_tokens;
         const wkCost = m.weekly_cost_usd !== undefined ? m.weekly_cost_usd : m.total_cost_usd;
         const pricingBasisText = m.pricing_estimated === true
-            ? `<span title="${escapeHtml(m.pricing_note || '')}" style="display:block;font-size:0.66rem;color:#fbbf24;">~ theo ${escapeHtml(m.pricing_basis_model || 'GPT-5.6 Sol Thinking')}</span>`
+            ? `<span title="${escapeHtml(tr(m.pricing_note || ''))}" style="display:block;font-size:0.66rem;color:#fbbf24;">${uiText('~ theo', '~ based on')} ${escapeHtml(m.pricing_basis_model || 'GPT-5.6 Sol Thinking')}</span>`
             : (m.pricing_source === 'official_feature_mapping'
-                ? `<span title="${escapeHtml(m.pricing_note || '')}" style="display:block;font-size:0.66rem;color:#86efac;">theo ${escapeHtml(m.pricing_basis_model || 'GPT-5.4')} (OpenAI)</span>`
+                ? `<span title="${escapeHtml(tr(m.pricing_note || ''))}" style="display:block;font-size:0.66rem;color:#86efac;">${uiText('theo', 'based on')} ${escapeHtml(m.pricing_basis_model || 'GPT-5.4')} (OpenAI)</span>`
                 : '');
-        const deleteButton = isManual ? '<button class="btn-delete-codex" onclick="deleteCodexModel(\'' + escapeHtml(m.model_id).replace(/'/g, "\\'") + '\')" title="Xóa model thủ công">🗑️</button>' : '';
+        const deleteButton = isManual ? '<button class="btn-delete-codex" onclick="deleteCodexModel(\'' + escapeHtml(m.model_id).replace(/'/g, "\\'") + '\')" title="' + uiText('Xóa model thủ công', 'Delete manual model') + '">🗑️</button>' : '';
         return `<tr class="${rowCls}" data-model-id="${escapeHtml(m.model_id)}">
             <td>
                 <div class="model-name-cell">
@@ -3947,8 +4119,8 @@ function renderModelsTable(breakdown) {
         const splitTokens = (agy, codexExact, codexManual) => `<span style="display:block;color:var(--cyan-400);">AGY est: ${formatNumber(agy)}</span><span style="display:block;color:var(--emerald-400);">Codex exact: ${formatNumber(codexExact)}</span>${codexManual ? `<span style="display:block;color:var(--text-muted);font-size:0.72rem;">Codex manual: ${formatNumber(codexManual)}</span>` : ''}`;
 
         tfoot.innerHTML = `<tr class="tfoot-row">
-            <td><strong>TỔNG CỘNG (THEO NGUỒN)</strong></td>
-            <td>${sorted.length} models</td>
+            <td><strong>${uiText('TỔNG CỘNG (THEO NGUỒN)', 'TOTAL (BY SOURCE)')}</strong></td>
+            <td>${sorted.length} ${uiText('models', 'models')}</td>
             <td>—</td>
             <td class="num">${splitTokens(totals.agy.today_tokens, totals.codexExact.today_tokens, totals.codexManual.today_tokens)}${renderFooterPeriodCost(totals.today_cost_usd, totals.unknown_today_cost)}</td>
             <td class="num">${splitTokens(totals.agy.weekly_tokens, totals.codexExact.weekly_tokens, totals.codexManual.weekly_tokens)}${renderFooterPeriodCost(totals.weekly_cost_usd, totals.unknown_weekly_cost)}</td>
@@ -4000,7 +4172,7 @@ function closeCodexLimitModal() {
 async function submitCodexModel() {
     const modelName = (document.getElementById('input-codex-model-name')?.value || '').trim();
     if (!modelName) {
-        showToast('Vui lòng nhập tên model!', true);
+        showToast(uiText('Vui lòng nhập tên model!', 'Enter a model name!'), true);
         return;
     }
 
@@ -4031,8 +4203,11 @@ async function submitCodexModel() {
             body: JSON.stringify(body)
         });
         if (resp.ok) {
-            const modeText = mode === 'add' ? 'cộng dồn' : 'cập nhật';
-            showToast(`Đã ${modeText} model "${modelName}" thành công!`);
+            const modeText = mode === 'add' ? uiText('cộng dồn', 'added to') : uiText('cập nhật', 'updated');
+            showToast(uiText(
+                `Đã ${modeText} model "${modelName}" thành công!`,
+                `Successfully ${modeText} model "${modelName}"!`,
+            ));
             closeCodexModal();
             // Clear form
             ['input-codex-model-name','input-codex-total-tokens','input-codex-weekly-tokens','input-codex-cost','input-codex-weekly-cost','input-codex-input-tokens','input-codex-output-tokens','input-codex-thinking-tokens','input-codex-sessions','input-codex-responses','input-codex-tool-calls'].forEach(id => {
@@ -4042,10 +4217,10 @@ async function submitCodexModel() {
             await forceRefreshAfterMutation();
         } else {
             const err = await resp.json();
-            showToast('Lỗi: ' + (err.message || 'Unknown error'), true);
+            showToast(uiText('Lỗi: ', 'Error: ') + (err.message || 'Unknown error'), true);
         }
     } catch (e) {
-        showToast('Lỗi kết nối server: ' + e.message, true);
+        showToast(uiText('Lỗi kết nối server: ', 'Server connection error: ') + e.message, true);
     }
 }
 
@@ -4058,19 +4233,22 @@ async function submitCodexWeeklyLimit() {
             body: JSON.stringify({ action: 'set_weekly_limit', weekly_limit_tokens: limit })
         });
         if (resp.ok) {
-            showToast(`Đã cập nhật hạn mức Codex: ${formatNumber(limit)} tokens/tuần`);
+            showToast(uiText(
+                `Đã cập nhật hạn mức Codex: ${formatNumber(limit)} tokens/tuần`,
+                `Updated Codex quota: ${formatNumber(limit)} tokens/week`,
+            ));
             closeCodexLimitModal();
             await forceRefreshAfterMutation();
         } else {
-            showToast('Lỗi cập nhật hạn mức!', true);
+            showToast(uiText('Lỗi cập nhật hạn mức!', 'Could not update the quota!'), true);
         }
     } catch (e) {
-        showToast('Lỗi kết nối server: ' + e.message, true);
+        showToast(uiText('Lỗi kết nối server: ', 'Server connection error: ') + e.message, true);
     }
 }
 
 async function deleteCodexModel(modelName) {
-    if (!confirm(`Xóa model "${modelName}" khỏi danh sách Codex?`)) return;
+    if (!confirm(uiText(`Xóa model "${modelName}" khỏi danh sách Codex?`, `Delete model "${modelName}" from the Codex list?`))) return;
     try {
         const resp = await fetch('/api/codex-usage', {
             method: 'POST',
@@ -4078,11 +4256,11 @@ async function deleteCodexModel(modelName) {
             body: JSON.stringify({ action: 'delete_model', model_name: modelName })
         });
         if (resp.ok) {
-            showToast(`Đã xóa model "${modelName}"`);
+            showToast(uiText(`Đã xóa model "${modelName}"`, `Deleted model "${modelName}"`));
             await forceRefreshAfterMutation();
         }
     } catch (e) {
-        showToast('Lỗi: ' + e.message, true);
+        showToast(uiText('Lỗi: ', 'Error: ') + e.message, true);
     }
 }
 
@@ -4097,12 +4275,12 @@ function taskOutcomeStatusGroup(mission) {
 function taskOutcomeStatusLabel(mission) {
     const status = String(mission?.status || 'unresolved');
     const labels = {
-        accepted_manual: 'Đã đạt · anh xác nhận',
-        accepted_explicit: 'Đã đạt · phát hiện câu xác nhận',
-        accepted_inferred: 'Đã đạt · suy ra từ nhiệm vụ kế',
-        unresolved_manual: 'Chưa xác nhận · anh đánh dấu',
-        abandoned_manual: 'Đã bỏ dở · anh đánh dấu',
-        unresolved: 'Chưa xác nhận',
+        accepted_manual: uiText('Đã đạt · anh xác nhận', 'Accepted · manually confirmed'),
+        accepted_explicit: uiText('Đã đạt · phát hiện câu xác nhận', 'Accepted · confirmation detected'),
+        accepted_inferred: uiText('Đã đạt · suy ra từ nhiệm vụ kế', 'Accepted · inferred from the next task'),
+        unresolved_manual: uiText('Chưa xác nhận · anh đánh dấu', 'Unconfirmed · manually marked'),
+        abandoned_manual: uiText('Đã bỏ dở · anh đánh dấu', 'Abandoned · manually marked'),
+        unresolved: uiText('Chưa xác nhận', 'Unconfirmed'),
     };
     return labels[status] || status;
 }
@@ -4119,11 +4297,11 @@ function renderCodexTaskOutcomeSummary(outcomes) {
     if (!container) return;
     const summary = outcomes?.summary || {};
     const cards = [
-        ['Nhiệm vụ đã ghép', formatNumber(Number(summary.mission_count || 0)), 'Từ các lượt Codex trực tiếp'],
-        ['Đã đạt yêu cầu', formatNumber(Number(summary.accepted_count || 0)), 'Xác nhận hoặc suy ra có độ tin cậy'],
-        ['Chưa xác nhận', formatNumber(Number(summary.unresolved_count || 0)), 'Cần kiểm tra trước khi dùng'],
-        ['Đổi model / subagent', formatNumber(Number(summary.mixed_model_count || 0)), 'Giữ thành tuyến, loại khỏi ma trận chính'],
-        ['Đã được anh kiểm tra', formatNumber(Number(summary.reviewed_count || 0)), 'Loại việc hoặc kết quả đã sửa tay'],
+        [uiText('Nhiệm vụ đã ghép', 'Grouped tasks'), formatNumber(Number(summary.mission_count || 0)), uiText('Từ các lượt Codex trực tiếp', 'Built from direct Codex turns')],
+        [uiText('Đã đạt yêu cầu', 'Accepted'), formatNumber(Number(summary.accepted_count || 0)), uiText('Xác nhận hoặc suy ra có độ tin cậy', 'Confirmed or inferred with confidence')],
+        [uiText('Chưa xác nhận', 'Unconfirmed'), formatNumber(Number(summary.unresolved_count || 0)), uiText('Cần kiểm tra trước khi dùng', 'Review before using as evidence')],
+        [uiText('Đổi model / subagent', 'Model switch / subagent'), formatNumber(Number(summary.mixed_model_count || 0)), uiText('Giữ thành tuyến, loại khỏi ma trận chính', 'Route is preserved and excluded from the pure-model matrix')],
+        [uiText('Đã được anh kiểm tra', 'Manually reviewed'), formatNumber(Number(summary.reviewed_count || 0)), uiText('Loại việc hoặc kết quả đã sửa tay', 'Task type or outcome was manually corrected')],
     ];
     container.innerHTML = cards.map(([label, value, note]) => `
         <div class="summary-card">
@@ -4141,68 +4319,73 @@ function renderCodexTaskOutcomeMatrix(outcomes = cachedCodexTaskOutcomes) {
     if (!head || !body) return;
     const matrix = outcomes?.matrices?.[currentTaskOutcomeRange];
     if (!matrix || !Array.isArray(matrix.models) || matrix.models.length === 0) {
-        head.innerHTML = '<tr><th>Loại công việc</th><th>Kết quả</th></tr>';
-        body.innerHTML = '<tr><td colspan="2" style="text-align:center;padding:1.2rem;color:var(--text-muted);">Chưa có nhiệm vụ một model đã đạt yêu cầu trong khoảng này.</td></tr>';
-        if (note) note.textContent = 'Chưa đủ dữ liệu đã đạt yêu cầu để lập ma trận.';
+        head.innerHTML = `<tr><th>${uiText('Loại công việc', 'Task type')}</th><th>${uiText('Kết quả', 'Outcome')}</th></tr>`;
+        body.innerHTML = `<tr><td colspan="2" style="text-align:center;padding:1.2rem;color:var(--text-muted);">${uiText('Chưa có nhiệm vụ một model đã đạt yêu cầu trong khoảng này.', 'No accepted single-model tasks are available in this range yet.')}</td></tr>`;
+        if (note) note.textContent = uiText('Chưa đủ dữ liệu đã đạt yêu cầu để lập ma trận.', 'Not enough accepted-task data to build the matrix.');
         return;
     }
 
-    head.innerHTML = `<tr><th>Loại công việc</th>${matrix.models.map(model => `
-        <th class="task-model-heading">${escapeHtml(model)}${model === matrix.baseline_model ? '<span class="task-cell-meta">Mốc Sol High</span>' : ''}</th>
+    head.innerHTML = `<tr><th>${uiText('Loại công việc', 'Task type')}</th>${matrix.models.map(model => `
+        <th class="task-model-heading">${escapeHtml(model)}${model === matrix.baseline_model ? `<span class="task-cell-meta">${uiText('Mốc Sol High', 'Sol High baseline')}</span>` : ''}</th>
     `).join('')}</tr>`;
 
     body.innerHTML = (matrix.rows || []).map(row => {
         const cells = matrix.models.map(model => {
             const cell = row.cells?.[model] || { sample_status: 'no_data', sample_count: 0 };
             if (cell.sample_status === 'no_data') {
-                return '<td class="task-matrix-cell is-missing">Chưa có dữ liệu</td>';
+                return `<td class="task-matrix-cell is-missing">${uiText('Chưa có dữ liệu', 'No data')}</td>`;
             }
             if (cell.sample_status === 'insufficient') {
-                return `<td class="task-matrix-cell is-sparse">Chưa đủ mẫu (n=${Number(cell.sample_count || 0)})<span class="task-cell-meta">Trung vị ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
+                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đủ mẫu', 'Insufficient samples')} (n=${Number(cell.sample_count || 0)})<span class="task-cell-meta">${uiText('Trung vị', 'Median')} ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
             }
             if (cell.sample_status === 'no_baseline') {
-                return `<td class="task-matrix-cell is-sparse">Chưa đủ mẫu Sol High<span class="task-cell-meta">Model này: n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
+                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đủ mẫu Sol High', 'Insufficient Sol High samples')}<span class="task-cell-meta">${uiText('Model này', 'This model')}: n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
             }
             const ratio = Number(cell.relative_tokens_vs_sol_high);
             const cellClass = model === matrix.baseline_model ? 'is-baseline' : (ratio < 0.95 ? 'is-efficient' : (ratio > 1.05 ? 'is-costly' : ''));
             const costText = cell.median_cost_usd === null || cell.median_cost_usd === undefined
-                ? 'phí chưa rõ'
+                ? uiText('phí chưa rõ', 'cost unknown')
                 : `$${Number(cell.median_cost_usd).toFixed(2)}`;
             return `<td class="task-matrix-cell ${cellClass}">
                 <span class="task-cell-ratio">${Number.isFinite(ratio) ? ratio.toFixed(2) + '×' : '—'}</span>
                 <span class="task-cell-meta">${formatNumber(Number(cell.median_total_tokens || 0))} token · ${costText}</span>
-                <span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · sửa ${Number(cell.median_correction_turns || 0).toFixed(1)} lượt · đạt lần đầu ${Number(cell.first_pass_pct || 0).toFixed(0)}%</span>
-                <span class="task-cell-meta">Công dạy ~${formatNumber(Number(cell.median_added_guidance_tokens || 0))} token · tin cậy ${escapeHtml(cell.confidence || 'low')}</span>
+                <span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · ${uiText('sửa', 'corrections')} ${Number(cell.median_correction_turns || 0).toFixed(1)} ${uiText('lượt', 'turns')} · ${uiText('đạt lần đầu', 'first-pass')} ${Number(cell.first_pass_pct || 0).toFixed(0)}%</span>
+                <span class="task-cell-meta">${uiText('Công dạy', 'Added guidance')} ~${formatNumber(Number(cell.median_added_guidance_tokens || 0))} token · ${uiText('tin cậy', 'confidence')} ${escapeHtml(tr(cell.confidence || 'low'))}</span>
             </td>`;
         }).join('');
-        return `<tr><td><strong>${escapeHtml(row.label || row.category || 'Khác')}</strong></td>${cells}</tr>`;
+        return `<tr><td><strong>${escapeHtml(tr(row.label || row.category || 'Khác'))}</strong></td>${cells}</tr>`;
     }).join('');
 
     if (note) {
-        const rangeLabel = currentTaskOutcomeRange === 'all' ? 'toàn bộ dữ liệu' : `${currentTaskOutcomeRange} ngày`;
-        note.textContent = `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} nhiệm vụ một model đã đạt · cần ít nhất ${Number(matrix.minimum_samples || 3)} mẫu mỗi ô và mốc ${matrix.baseline_model || 'Sol High'}.`;
+        const rangeLabel = currentTaskOutcomeRange === 'all'
+            ? uiText('toàn bộ dữ liệu', 'all data')
+            : uiText(`${currentTaskOutcomeRange} ngày`, `${currentTaskOutcomeRange} days`);
+        note.textContent = uiText(
+            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} nhiệm vụ một model đã đạt · cần ít nhất ${Number(matrix.minimum_samples || 3)} mẫu mỗi ô và mốc ${matrix.baseline_model || 'Sol High'}.`,
+            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} accepted single-model tasks · at least ${Number(matrix.minimum_samples || 3)} samples per cell are required, with ${matrix.baseline_model || 'Sol High'} as the baseline.`,
+        );
     }
 }
 
 function taskOutcomeCategoryOptions(outcomes, mission) {
     const automatic = !mission?.category_reviewed;
-    const autoLabel = `Tự động (${mission?.category_label || 'Khác'})`;
+    const autoLabel = `${uiText('Tự động', 'Automatic')} (${tr(mission?.category_label || 'Khác')})`;
     return [
         `<option value="auto" ${automatic ? 'selected' : ''}>${escapeHtml(autoLabel)}</option>`,
         ...(outcomes?.categories || []).map(category => (
-            `<option value="${escapeHtml(category.key)}" ${!automatic && category.key === mission.category ? 'selected' : ''}>${escapeHtml(category.label)}</option>`
+            `<option value="${escapeHtml(category.key)}" ${!automatic && category.key === mission.category ? 'selected' : ''}>${escapeHtml(tr(category.label))}</option>`
         )),
     ].join('');
 }
 
 function taskOutcomeReviewOptions(mission) {
     const automatic = !mission?.outcome_reviewed;
-    const autoLabel = `Tự động (${taskOutcomeStatusLabel(mission)})`;
+    const autoLabel = `${uiText('Tự động', 'Automatic')} (${taskOutcomeStatusLabel(mission)})`;
     return [
         `<option value="auto" ${automatic ? 'selected' : ''}>${escapeHtml(autoLabel)}</option>`,
-        `<option value="accepted" ${!automatic && mission.accepted ? 'selected' : ''}>Đã đạt yêu cầu</option>`,
-        `<option value="unresolved" ${!automatic && taskOutcomeStatusGroup(mission) === 'unresolved' ? 'selected' : ''}>Chưa xác nhận</option>`,
-        `<option value="abandoned" ${!automatic && taskOutcomeStatusGroup(mission) === 'abandoned' ? 'selected' : ''}>Đã bỏ dở</option>`,
+        `<option value="accepted" ${!automatic && mission.accepted ? 'selected' : ''}>${uiText('Đã đạt yêu cầu', 'Accepted')}</option>`,
+        `<option value="unresolved" ${!automatic && taskOutcomeStatusGroup(mission) === 'unresolved' ? 'selected' : ''}>${uiText('Chưa xác nhận', 'Unconfirmed')}</option>`,
+        `<option value="abandoned" ${!automatic && taskOutcomeStatusGroup(mission) === 'abandoned' ? 'selected' : ''}>${uiText('Đã bỏ dở', 'Abandoned')}</option>`,
     ].join('');
 }
 
@@ -4211,7 +4394,7 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
     const count = document.getElementById('task-outcome-visible-count');
     const note = document.getElementById('task-outcome-audit-note');
     if (!body) return;
-    const search = String(document.getElementById('task-outcome-search')?.value || '').trim().toLocaleLowerCase('vi');
+    const search = String(document.getElementById('task-outcome-search')?.value || '').trim().toLocaleLowerCase(uiLocale());
     const missions = Array.isArray(outcomes?.missions) ? outcomes.missions : [];
     const filtered = missions.filter(mission => {
         if (currentTaskOutcomeCategoryFilter !== 'all' && mission.category !== currentTaskOutcomeCategoryFilter) return false;
@@ -4219,15 +4402,15 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
         if (currentTaskOutcomeRouteFilter === 'pure' && !mission.pure_model) return false;
         if (currentTaskOutcomeRouteFilter === 'mixed' && mission.pure_model) return false;
         if (search) {
-            const haystack = `${mission.title || ''} ${mission.route_label || ''} ${mission.category_label || ''}`.toLocaleLowerCase('vi');
+            const haystack = `${mission.title || ''} ${mission.route_label || ''} ${mission.category_label || ''}`.toLocaleLowerCase(uiLocale());
             if (!haystack.includes(search)) return false;
         }
         return true;
     });
     const visible = filtered.slice(0, 300);
-    if (count) count.textContent = `${formatNumber(visible.length)} / ${formatNumber(filtered.length)} nhiệm vụ`;
+    if (count) count.textContent = `${formatNumber(visible.length)} / ${formatNumber(filtered.length)} ${uiText('nhiệm vụ', 'tasks')}`;
     if (!visible.length) {
-        body.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:1.2rem;color:var(--text-muted);">Không có nhiệm vụ phù hợp bộ lọc.</td></tr>';
+        body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:1.2rem;color:var(--text-muted);">${uiText('Không có nhiệm vụ phù hợp bộ lọc.', 'No tasks match the current filters.')}</td></tr>`;
     } else {
         body.innerHTML = visible.map(mission => {
             const anchor = escapeHtml(String(mission.anchor_turn_id || ''));
@@ -4236,37 +4419,42 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
             const confidence = taskOutcomeConfidence(mission);
             const mixed = !mission.pure_model;
             const turnDetails = (mission.turns || []).map((turn, index) => `
-                <li><strong>Lượt ${index + 1}</strong> · ${escapeHtml(turn.model_key || 'Không rõ model')} · ${formatNumber(Number(turn.total_tokens || 0))} token<br>${escapeHtml(turn.prompt || '')}</li>
+                <li><strong>${uiText('Lượt', 'Turn')} ${index + 1}</strong> · ${escapeHtml(turn.model_key || uiText('Không rõ model', 'Unknown model'))} · ${formatNumber(Number(turn.total_tokens || 0))} token<br>${escapeHtml(turn.prompt || '')}</li>
             `).join('');
             return `<tr data-mission-anchor="${anchor}">
                 <td>
                     <div class="task-mission-title">${escapeHtml(mission.title || '')}</div>
-                    <div class="task-mission-subline">${escapeHtml(String(mission.id || ''))}${mission.reviewed ? ' · đã hiệu chỉnh' : ' · tự động'}</div>
-                    <details class="task-mission-turns"><summary>Xem ${Number(mission.turn_count || 0)} lượt làm việc</summary><ol>${turnDetails}</ol></details>
+                    <div class="task-mission-subline">${escapeHtml(String(mission.id || ''))}${mission.reviewed ? uiText(' · đã hiệu chỉnh', ' · reviewed') : uiText(' · tự động', ' · automatic')}</div>
+                    <details class="task-mission-turns"><summary>${uiText(`Xem ${Number(mission.turn_count || 0)} lượt làm việc`, `View ${Number(mission.turn_count || 0)} work turns`)}</summary><ol>${turnDetails}</ol></details>
                 </td>
                 <td><select class="task-review-select" data-task-review="category" data-anchor="${anchor}">${taskOutcomeCategoryOptions(outcomes, mission)}</select></td>
                 <td>
                     <span class="task-status-pill ${statusGroup}">${escapeHtml(taskOutcomeStatusLabel(mission))}</span>
                     <select class="task-review-select" data-task-review="outcome" data-anchor="${anchor}" style="margin-top:6px;">${taskOutcomeReviewOptions(mission)}</select>
                 </td>
-                <td><div class="task-route ${mixed ? 'task-route-mixed' : ''}">${escapeHtml(mission.route_label || 'Không rõ model')}</div>${mission.has_delegated_work ? `<div class="task-mission-subline">Có ${Number(mission.delegated_turn_count || 0)} lượt subagent · ${formatNumber(Number(mission.delegated_tokens || 0))} token</div>` : ''}</td>
+                <td><div class="task-route ${mixed ? 'task-route-mixed' : ''}">${escapeHtml(mission.route_label || uiText('Không rõ model', 'Unknown model'))}</div>${mission.has_delegated_work ? `<div class="task-mission-subline">${uiText(`Có ${Number(mission.delegated_turn_count || 0)} lượt subagent`, `${Number(mission.delegated_turn_count || 0)} subagent turns`)} · ${formatNumber(Number(mission.delegated_tokens || 0))} token</div>` : ''}</td>
                 <td class="num"><strong>${Number(mission.turn_count || 0)}</strong> / ${Number(mission.correction_turns || 0)}</td>
-                <td class="num"><strong>${formatNumber(Number(mission.total_tokens || 0))}</strong><div class="task-mission-subline">${mission.cost_known ? '$' + Number(mission.cost_usd || 0).toFixed(2) : 'phí chưa rõ'}</div></td>
+                <td class="num"><strong>${formatNumber(Number(mission.total_tokens || 0))}</strong><div class="task-mission-subline">${mission.cost_known ? '$' + Number(mission.cost_usd || 0).toFixed(2) : uiText('phí chưa rõ', 'cost unknown')}</div></td>
                 <td class="num">~${formatNumber(Number(mission.added_guidance_tokens_est || 0))}</td>
                 <td>${formatDate(mission.start_at)}</td>
-                <td><span class="task-confidence-pill ${confidence}">${confidence === 'high' ? 'Cao' : (confidence === 'medium' ? 'Vừa' : 'Thấp')}</span></td>
+                <td><span class="task-confidence-pill ${confidence}">${confidence === 'high' ? uiText('Cao', 'High') : (confidence === 'medium' ? uiText('Vừa', 'Medium') : uiText('Thấp', 'Low'))}</span></td>
                 <td><div class="task-boundary-actions">
-                    <button class="task-boundary-btn" data-task-action="merge_previous" data-anchor="${anchor}" ${mission.previous_anchor_turn_id ? '' : 'disabled'}>Ghép mục trước</button>
-                    <button class="task-boundary-btn" data-task-action="split_last" data-turn="${lastTurn}" ${Number(mission.turn_count || 0) > 1 ? '' : 'disabled'}>Tách lượt cuối</button>
-                    <button class="task-boundary-btn" data-task-action="reset_boundary" data-anchor="${anchor}" ${mission.boundary_override ? '' : 'disabled'}>Trả tự động</button>
+                    <button class="task-boundary-btn" data-task-action="merge_previous" data-anchor="${anchor}" ${mission.previous_anchor_turn_id ? '' : 'disabled'}>${uiText('Ghép mục trước', 'Merge previous')}</button>
+                    <button class="task-boundary-btn" data-task-action="split_last" data-turn="${lastTurn}" ${Number(mission.turn_count || 0) > 1 ? '' : 'disabled'}>${uiText('Tách lượt cuối', 'Split last turn')}</button>
+                    <button class="task-boundary-btn" data-task-action="reset_boundary" data-anchor="${anchor}" ${mission.boundary_override ? '' : 'disabled'}>${uiText('Trả tự động', 'Restore automatic')}</button>
                 </div></td>
             </tr>`;
         }).join('');
     }
     if (note) {
         const diagnostics = outcomes?.diagnostics || {};
-        const truncated = filtered.length > visible.length ? ` Chỉ hiện 300/${formatNumber(filtered.length)} kết quả phù hợp.` : '';
-        note.textContent = `Đã lập chỉ mục ${formatNumber(Number(diagnostics.turns_indexed || 0))} lượt; gắn ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} lượt subagent vào nhiệm vụ cha. Tự động phân nhóm là gợi ý.${truncated}`;
+        const truncated = filtered.length > visible.length
+            ? uiText(` Chỉ hiện 300/${formatNumber(filtered.length)} kết quả phù hợp.`, ` Showing only 300/${formatNumber(filtered.length)} matching results.`)
+            : '';
+        note.textContent = uiText(
+            `Đã lập chỉ mục ${formatNumber(Number(diagnostics.turns_indexed || 0))} lượt; gắn ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} lượt subagent vào nhiệm vụ cha. Tự động phân nhóm là gợi ý.${truncated}`,
+            `Indexed ${formatNumber(Number(diagnostics.turns_indexed || 0))} turns; attached ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} subagent turns to their parent tasks. Automatic grouping is a suggestion.${truncated}`,
+        );
     }
 }
 
@@ -4279,8 +4467,8 @@ function renderCodexTaskOutcomes(codexUsage) {
     if (categoryFilter) {
         const allowed = new Set(['all', ...(outcomes.categories || []).map(item => item.key)]);
         if (!allowed.has(currentTaskOutcomeCategoryFilter)) currentTaskOutcomeCategoryFilter = 'all';
-        categoryFilter.innerHTML = '<option value="all">Tất cả loại công việc</option>' + (outcomes.categories || []).map(item => (
-            `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`
+        categoryFilter.innerHTML = `<option value="all">${uiText('Tất cả loại công việc', 'All task types')}</option>` + (outcomes.categories || []).map(item => (
+            `<option value="${escapeHtml(item.key)}">${escapeHtml(tr(item.label))}</option>`
         )).join('');
         categoryFilter.value = currentTaskOutcomeCategoryFilter;
     }
@@ -4297,10 +4485,10 @@ async function saveCodexTaskOutcomeReview(payload) {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.message || `HTTP ${response.status}`);
-        showToast('Đã lưu hiệu chỉnh nhiệm vụ.');
+        showToast(uiText('Đã lưu hiệu chỉnh nhiệm vụ.', 'Task review saved.'));
         await forceRefreshAfterMutation();
     } catch (error) {
-        showToast(`Không thể lưu hiệu chỉnh: ${error.message}`, true);
+        showToast(uiText(`Không thể lưu hiệu chỉnh: ${error.message}`, `Could not save task review: ${error.message}`), true);
         if (cachedCodexTaskOutcomes) renderCodexTaskOutcomeAudit(cachedCodexTaskOutcomes);
     }
 }
@@ -4368,6 +4556,10 @@ function initCodexTaskOutcomeControls() {
 document.addEventListener('DOMContentLoaded', () => {
     // Tab setup
     setupTabs();
+
+    window.addEventListener('usage-tracker:language-changed', () => {
+        if (currentData) renderAll(currentData);
+    });
 
     restoreSelectPreference('session-signal-filter', 'investigationSignalFilter');
     restoreSelectPreference('sort-select', 'investigationSort');
