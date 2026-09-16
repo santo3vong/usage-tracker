@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">5h quota per completed task</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Median quota cost plus task-size context · synthetic demo data</text>
+
+  <rect x="28" y="120" width="1144" height="502" rx="18" fill="#12131c"/>
+  <text x="54" y="158" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">MODEL / ROUTE</text>
+  <text x="366" y="158" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">MEDIAN 5H QUOTA / TASK</text>
+  <text x="704" y="158" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">TOKENS / TASK</text>
+  <text x="930" y="158" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">SAMPLE</text>
+  <line x1="54" y1="176" x2="1144" y2="176" stroke="#293044"/>
+
+  <text x="54" y="226" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Sol High · Coding</text>
+  <text x="366" y="226" fill="#818cf8" font-family="Arial, sans-serif" font-size="17" font-weight="700">5.3%</text>
+  <rect x="438" y="211" width="200" height="14" rx="7" fill="#222436"/>
+  <rect x="438" y="211" width="106" height="14" rx="7" fill="#6366f1"/>
+  <text x="704" y="226" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">940k</text>
+  <text x="930" y="226" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="14">n = 14</text>
+
+  <rect x="46" y="252" width="1100" height="66" rx="10" fill="#181926"/>
+  <text x="54" y="292" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Luna High · Coding</text>
+  <text x="366" y="292" fill="#34d399" font-family="Arial, sans-serif" font-size="17" font-weight="700">4.6%</text>
+  <rect x="438" y="277" width="200" height="14" rx="7" fill="#222436"/>
+  <rect x="438" y="277" width="92" height="14" rx="7" fill="#10b981"/>
+  <text x="704" y="292" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">760k</text>
+  <text x="930" y="292" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="14">n = 11</text>
+
+  <text x="54" y="365" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Luna xhigh · Research</text>
+  <text x="366" y="365" fill="#fbbf24" font-family="Arial, sans-serif" font-size="17" font-weight="700">7.8%</text>
+  <rect x="438" y="350" width="200" height="14" rx="7" fill="#222436"/>
+  <rect x="438" y="350" width="156" height="14" rx="7" fill="#f59e0b"/>
+  <text x="704" y="365" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">1.31M</text>
+  <text x="930" y="365" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="14">n = 8</text>
+
+  <rect x="46" y="391" width="1100" height="66" rx="10" fill="#181926"/>
+  <text x="54" y="431" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Sol High · Creative</text>
+  <text x="366" y="431" fill="#94a3b8" font-family="Arial, sans-serif" font-size="15">Chưa đủ mẫu</text>
+  <text x="704" y="431" fill="#64748b" font-family="Arial, sans-serif" font-size="14">—</text>
+  <text x="930" y="431" fill="#fbbf24" font-family="Arial, sans-serif" font-size="14">n = 2</text>
+
+  <text x="54" y="504" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Luna High · Planning</text>
+  <text x="366" y="504" fill="#94a3b8" font-family="Arial, sans-serif" font-size="15">Chưa có dữ liệu</text>
+  <text x="704" y="504" fill="#64748b" font-family="Arial, sans-serif" font-size="14">—</text>
+  <text x="930" y="504" fill="#64748b" font-family="Arial, sans-serif" font-size="14">n = 0</text>
+
+  <rect x="54" y="546" width="1090" height="52" rx="12" fill="#0f172a"/>
+  <text x="76" y="578" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="13">A low quota/task number only becomes meaningful when task category, task size and sample count are visible beside it.</text>
+</svg>

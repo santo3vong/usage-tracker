@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">Usage Tracker</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Quota overview · synthetic demo data</text>
+  <rect x="976" y="44" width="160" height="30" rx="15" fill="#0f2f2b"/>
+  <circle cx="996" cy="59" r="5" fill="#34d399"/>
+  <text x="1010" y="64" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="13">LIVE APP-SERVER</text>
+
+  <rect x="28" y="118" width="354" height="190" rx="18" fill="#12131c"/>
+  <text x="54" y="151" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">5-hour quota</text>
+  <text x="54" y="200" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="42" font-weight="700">64%</text>
+  <text x="145" y="198" fill="#64748b" font-family="Arial, sans-serif" font-size="14">remaining</text>
+  <rect x="54" y="226" width="300" height="14" rx="7" fill="#222436"/>
+  <rect x="54" y="226" width="192" height="14" rx="7" fill="#6366f1"/>
+  <text x="54" y="274" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Reset in 2h 18m</text>
+
+  <rect x="408" y="118" width="354" height="190" rx="18" fill="#12131c"/>
+  <text x="434" y="151" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">Weekly quota</text>
+  <text x="434" y="200" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="42" font-weight="700">41%</text>
+  <text x="525" y="198" fill="#64748b" font-family="Arial, sans-serif" font-size="14">remaining</text>
+  <rect x="434" y="226" width="300" height="14" rx="7" fill="#222436"/>
+  <rect x="434" y="226" width="123" height="14" rx="7" fill="#06b6d4"/>
+  <text x="434" y="274" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Source: direct rate-limit RPC</text>
+
+  <rect x="788" y="118" width="384" height="190" rx="18" fill="#12131c"/>
+  <text x="814" y="151" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">Current burn</text>
+  <text x="814" y="200" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="42" font-weight="700">7.4%</text>
+  <text x="925" y="198" fill="#64748b" font-family="Arial, sans-serif" font-size="14">/ hour</text>
+  <text x="814" y="240" fill="#fbbf24" font-family="Arial, sans-serif" font-size="14">↑ above recent typical rate</text>
+  <text x="814" y="274" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Useful as an early warning, not a verdict</text>
+
+  <rect x="28" y="334" width="1144" height="288" rx="18" fill="#12131c"/>
+  <text x="54" y="370" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="18" font-weight="700">Recent 5-hour window</text>
+  <text x="54" y="395" fill="#64748b" font-family="Arial, sans-serif" font-size="13">Quota burn is shown together with source provenance and reset boundaries.</text>
+  <line x1="70" y1="560" x2="1124" y2="560" stroke="#293044" stroke-width="1"/>
+  <line x1="70" y1="450" x2="1124" y2="450" stroke="#202637" stroke-width="1"/>
+  <polyline points="80,535 200,520 320,505 440,470 560,462 680,430 800,440 920,398 1040,382 1120,365" fill="none" stroke="#818cf8" stroke-width="4"/>
+  <circle cx="1120" cy="365" r="7" fill="#818cf8"/>
+  <text x="70" y="590" fill="#64748b" font-family="Arial, sans-serif" font-size="12">window start</text>
+  <text x="1067" y="590" fill="#64748b" font-family="Arial, sans-serif" font-size="12">now</text>
+</svg>

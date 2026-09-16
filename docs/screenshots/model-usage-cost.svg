@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">Model usage &amp; cost</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Current reading beside typical completed-task usage · demo data</text>
+
+  <rect x="28" y="120" width="556" height="220" rx="18" fill="#12131c"/>
+  <text x="54" y="155" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">CURRENT TASK · Sol High</text>
+  <text x="54" y="205" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="38" font-weight="700">1.42M</text>
+  <text x="180" y="202" fill="#64748b" font-family="Arial, sans-serif" font-size="14">tokens so far</text>
+  <text x="54" y="248" fill="#fb7185" font-family="Arial, sans-serif" font-size="18">8.1% 5h quota / hour</text>
+  <text x="54" y="286" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">This says what is happening now.</text>
+  <rect x="54" y="305" width="500" height="8" rx="4" fill="#222436"/>
+  <rect x="54" y="305" width="342" height="8" rx="4" fill="#f43f5e"/>
+
+  <rect x="616" y="120" width="556" height="220" rx="18" fill="#12131c"/>
+  <text x="642" y="155" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">TYPICAL · accepted coding missions</text>
+  <text x="642" y="205" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="38" font-weight="700">940k</text>
+  <text x="760" y="202" fill="#64748b" font-family="Arial, sans-serif" font-size="14">median tokens / task</text>
+  <text x="642" y="248" fill="#34d399" font-family="Arial, sans-serif" font-size="18">5.3% median 5h quota / task</text>
+  <text x="642" y="286" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">This says what usually happens on comparable work.</text>
+  <text x="642" y="314" fill="#64748b" font-family="Arial, sans-serif" font-size="12">n = 14 accepted pure-model missions</text>
+
+  <rect x="28" y="372" width="1144" height="250" rx="18" fill="#12131c"/>
+  <text x="54" y="407" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="18" font-weight="700">Why both views matter</text>
+  <text x="54" y="439" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">A sudden expensive task can be visible now even when the historical baseline still looks healthy.</text>
+  <line x1="70" y1="570" x2="1124" y2="570" stroke="#293044"/>
+  <polyline points="80,545 180,532 280,525 380,520 480,512 580,505 680,498 780,475 880,430 980,452 1120,400" fill="none" stroke="#fb7185" stroke-width="4"/>
+  <line x1="80" y1="500" x2="1120" y2="500" stroke="#34d399" stroke-width="3" stroke-dasharray="10 8"/>
+  <text x="930" y="490" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="12">typical baseline</text>
+  <text x="1035" y="390" fill="#fda4af" font-family="Arial, sans-serif" font-size="12">current spike</text>
+</svg>

@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">Task Outcome / Mission Review</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Count the whole objective, including corrections and re-teaching · demo data</text>
+
+  <rect x="28" y="120" width="1144" height="118" rx="18" fill="#12131c"/>
+  <text x="54" y="156" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="18" font-weight="700">Mission: Repair parser and verify regression</text>
+  <rect x="54" y="178" width="88" height="28" rx="14" fill="#0f2f2b"/>
+  <text x="76" y="197" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="12">ACCEPTED</text>
+  <rect x="154" y="178" width="112" height="28" rx="14" fill="#2a2138"/>
+  <text x="175" y="197" fill="#c4b5fd" font-family="Arial, sans-serif" font-size="12">PURE MODEL</text>
+  <text x="294" y="197" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">4 turns · 1.08M tokens · 1 repair turn</text>
+
+  <rect x="28" y="264" width="764" height="358" rx="18" fill="#12131c"/>
+  <text x="54" y="300" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">MISSION TIMELINE</text>
+  <line x1="94" y1="350" x2="94" y2="555" stroke="#293044" stroke-width="3"/>
+  <circle cx="94" cy="365" r="10" fill="#6366f1"/>
+  <text x="126" y="360" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Start</text>
+  <text x="126" y="382" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">“Fix parser edge case and run tests”</text>
+  <circle cx="94" cy="430" r="10" fill="#f59e0b"/>
+  <text x="126" y="425" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Correction</text>
+  <text x="126" y="447" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">First result missed one regression path</text>
+  <circle cx="94" cy="495" r="10" fill="#06b6d4"/>
+  <text x="126" y="490" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Re-test</text>
+  <text x="126" y="512" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">Full suite passes after repair</text>
+  <circle cx="94" cy="560" r="10" fill="#10b981"/>
+  <text x="126" y="555" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="15" font-weight="700">Accepted</text>
+  <text x="126" y="577" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">Usage closes here, not after the first turn</text>
+
+  <rect x="818" y="264" width="354" height="358" rx="18" fill="#12131c"/>
+  <text x="844" y="300" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">MANUAL REVIEW</text>
+  <text x="844" y="345" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="14">Outcome</text>
+  <rect x="844" y="360" width="290" height="42" rx="10" fill="#1a1b29"/>
+  <text x="862" y="386" fill="#6ee7b7" font-family="Arial, sans-serif" font-size="14">Accepted ✓</text>
+  <text x="844" y="438" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="14">Category</text>
+  <rect x="844" y="453" width="290" height="42" rx="10" fill="#1a1b29"/>
+  <text x="862" y="479" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">Coding / Debugging</text>
+  <text x="844" y="531" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="14">Boundary</text>
+  <text x="844" y="558" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">Merge · Split · Reset heuristic</text>
+  <text x="844" y="594" fill="#64748b" font-family="Arial, sans-serif" font-size="12">Human review can override grouping.</text>
+</svg>

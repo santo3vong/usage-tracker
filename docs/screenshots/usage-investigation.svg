@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">Usage Log &amp; Investigation</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Why “just add the numbers” can be wrong · synthetic demo data</text>
+
+  <rect x="28" y="120" width="1144" height="474" rx="18" fill="#12131c"/>
+  <text x="54" y="157" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">TIME</text>
+  <text x="185" y="157" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">SOURCE</text>
+  <text x="390" y="157" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">RAW VALUE</text>
+  <text x="585" y="157" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">COUNTED</text>
+  <text x="775" y="157" fill="#94a3b8" font-family="Arial, sans-serif" font-size="13">WHY</text>
+  <line x1="54" y1="174" x2="1144" y2="174" stroke="#293044"/>
+
+  <text x="54" y="215" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">10:02</text>
+  <text x="185" y="215" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">turn_token_usage</text>
+  <text x="390" y="215" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="14">420,000</text>
+  <text x="585" y="215" fill="#34d399" font-family="Arial, sans-serif" font-size="14">420,000</text>
+  <text x="775" y="215" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">first cumulative observation</text>
+
+  <rect x="46" y="240" width="1100" height="60" rx="10" fill="#181926"/>
+  <text x="54" y="276" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">10:08</text>
+  <text x="185" y="276" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">turn_token_usage</text>
+  <text x="390" y="276" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="14">690,000</text>
+  <text x="585" y="276" fill="#34d399" font-family="Arial, sans-serif" font-size="14">270,000</text>
+  <text x="775" y="276" fill="#fbbf24" font-family="Arial, sans-serif" font-size="14">delta, not 690,000 again</text>
+
+  <text x="54" y="337" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">10:14</text>
+  <text x="185" y="337" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">response usage</text>
+  <text x="390" y="337" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="14">185,000</text>
+  <text x="585" y="337" fill="#34d399" font-family="Arial, sans-serif" font-size="14">185,000</text>
+  <text x="775" y="337" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">direct per-response record</text>
+
+  <rect x="46" y="362" width="1100" height="60" rx="10" fill="#181926"/>
+  <text x="54" y="398" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">10:18</text>
+  <text x="185" y="398" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">mixed model route</text>
+  <text x="390" y="398" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="14">310,000</text>
+  <text x="585" y="398" fill="#fbbf24" font-family="Arial, sans-serif" font-size="14">route-level</text>
+  <text x="775" y="398" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">not credited to one model</text>
+
+  <text x="54" y="459" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">10:26</text>
+  <text x="185" y="459" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="14">cost estimate</text>
+  <text x="390" y="459" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="14">unknown</text>
+  <text x="585" y="459" fill="#fbbf24" font-family="Arial, sans-serif" font-size="14">unknown</text>
+  <text x="775" y="459" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">never silently converted to $0</text>
+
+  <rect x="54" y="502" width="1090" height="66" rx="12" fill="#0f172a"/>
+  <text x="76" y="530" fill="#818cf8" font-family="Arial, sans-serif" font-size="14" font-weight="700">Investigation note</text>
+  <text x="76" y="553" fill="#cbd5e1" font-family="Arial, sans-serif" font-size="13">Preserve provenance first; compare local time, UTC and rolling-window boundaries before “fixing” a mismatch.</text>
+  <text x="54" y="624" fill="#64748b" font-family="Arial, sans-serif" font-size="12">All names and values in this image are synthetic.</text>
+</svg>

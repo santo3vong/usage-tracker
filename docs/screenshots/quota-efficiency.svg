@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <rect width="1200" height="650" rx="24" fill="#090a10"/>
+  <rect x="28" y="24" width="1144" height="70" rx="18" fill="#12131c"/>
+  <text x="60" y="55" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="24" font-weight="700">5h quota efficiency</text>
+  <text x="60" y="79" fill="#64748b" font-family="Arial, sans-serif" font-size="14">Compare quota burn for the same raw-token volume · synthetic demo data</text>
+
+  <rect x="28" y="120" width="1144" height="104" rx="18" fill="#12131c"/>
+  <text x="54" y="156" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14">How to read it</text>
+  <text x="54" y="187" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="15">1.00× = Sol High baseline. Above 1× means quota is burning faster for the same token volume; below 1× means slower.</text>
+
+  <rect x="28" y="250" width="1144" height="372" rx="18" fill="#12131c"/>
+  <text x="54" y="286" fill="#f1f5f9" font-family="Arial, sans-serif" font-size="18" font-weight="700">Recent model routes</text>
+
+  <text x="70" y="345" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="15">Sol High</text>
+  <rect x="230" y="326" width="650" height="26" rx="13" fill="#222436"/>
+  <rect x="230" y="326" width="430" height="26" rx="13" fill="#6366f1"/>
+  <text x="900" y="345" fill="#818cf8" font-family="Arial, sans-serif" font-size="16" font-weight="700">1.00×</text>
+  <text x="978" y="345" fill="#64748b" font-family="Arial, sans-serif" font-size="12">baseline</text>
+
+  <text x="70" y="415" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="15">Luna High</text>
+  <rect x="230" y="396" width="650" height="26" rx="13" fill="#222436"/>
+  <rect x="230" y="396" width="348" height="26" rx="13" fill="#10b981"/>
+  <text x="900" y="415" fill="#34d399" font-family="Arial, sans-serif" font-size="16" font-weight="700">0.81×</text>
+  <text x="978" y="415" fill="#64748b" font-family="Arial, sans-serif" font-size="12">lower burn</text>
+
+  <text x="70" y="485" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="15">Sol → Luna route</text>
+  <rect x="230" y="466" width="650" height="26" rx="13" fill="#222436"/>
+  <rect x="230" y="466" width="512" height="26" rx="13" fill="#f59e0b"/>
+  <text x="900" y="485" fill="#fbbf24" font-family="Arial, sans-serif" font-size="16" font-weight="700">1.19×</text>
+  <text x="978" y="485" fill="#64748b" font-family="Arial, sans-serif" font-size="12">mixed route</text>
+
+  <text x="70" y="555" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="15">Luna xhigh</text>
+  <rect x="230" y="536" width="650" height="26" rx="13" fill="#222436"/>
+  <rect x="230" y="536" width="456" height="26" rx="13" fill="#06b6d4"/>
+  <text x="900" y="555" fill="#22d3ee" font-family="Arial, sans-serif" font-size="16" font-weight="700">1.06×</text>
+  <text x="978" y="555" fill="#64748b" font-family="Arial, sans-serif" font-size="12">sample-specific</text>
+
+  <text x="54" y="603" fill="#64748b" font-family="Arial, sans-serif" font-size="12">These values are illustrative only. Your workload can produce a different ordering.</text>
+</svg>
