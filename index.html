@@ -1,0 +1,1794 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AGY Live Usage Tracker — Theo Dõi & Phân Tích Chi Tiết</title>
+    <meta name="description" content="Dashboard phân tích lượng usage, tokens, chi phí và tool calls trong Antigravity IDE theo thời gian thực">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=20260912-fixed-timeline-axis-1">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Ambient Animated Glows -->
+        <div class="bg-grid"></div>
+        <div class="bg-glow bg-glow-1"></div>
+        <div class="bg-glow bg-glow-2"></div>
+        <div class="bg-glow bg-glow-3"></div>
+
+        <!-- Top Notification Banner / Toast -->
+        <div class="toast" id="toast"></div>
+
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                            <path d="M14 2L26 8V20L14 26L2 20V8L14 2Z" stroke="url(#logo-grad)" stroke-width="2.2" fill="none"/>
+                            <path d="M14 8L20 11V17L14 20L8 17V11L14 8Z" fill="url(#logo-grad)" opacity="0.7"/>
+                            <circle cx="14" cy="14" r="3" fill="#38bdf8"/>
+                            <defs>
+                                <linearGradient id="logo-grad" x1="2" y1="2" x2="26" y2="26">
+                                    <stop stop-color="#6366f1"/>
+                                    <stop offset="0.5" stop-color="#a855f7"/>
+                                    <stop offset="1" stop-color="#38bdf8"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="title-row">
+                            <h1>AGY Usage Tracker</h1>
+                            <span class="badge-live" id="live-badge">
+                                <span class="badge-dot"></span> <span id="sync-mode-label">LIVE SYNC</span>
+                            </span>
+                        </div>
+                        <p class="subtitle">Giám sát & phân tích mức độ tiêu tốn Token, Chi phí & Tool Calls trong IDE</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <!-- Account Profile Pill -->
+                <div class="account-pill" id="account-pill">
+                    <img id="user-avatar" class="user-avatar" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="User avatar">
+                    <div class="account-info">
+                        <span class="account-name" id="account-name">Local user</span>
+                        <span class="account-email" id="account-email">Not connected</span>
+                    </div>
+                </div>
+
+                <!-- Auto Refresh Selector -->
+                <div class="control-group">
+                    <label for="auto-sync-select" class="control-label">Tự động đồng bộ:</label>
+                    <select id="auto-sync-select" class="select-styled">
+                        <option value="0">Tắt (Thủ công)</option>
+                        <option value="5">Mỗi 5 giây</option>
+                        <option value="10" selected>Mỗi 10 giây</option>
+                        <option value="30">Mỗi 30 giây</option>
+                        <option value="60">Mỗi 1 phút</option>
+                    </select>
+                </div>
+
+                <!-- Table Size / Density Control -->
+                <div class="control-group density-control-group" style="position:relative;">
+                    <label class="control-label">Cỡ ô bảng:</label>
+                    <div class="density-btn-group" id="density-btn-group">
+                        <button type="button" class="btn-density" data-density="compact" title="Nhỏ gọn (Hiển thị nhiều dòng nhất)">
+                            <span>Nhỏ</span>
+                        </button>
+                        <button type="button" class="btn-density active" data-density="comfortable" title="Vừa phải (Cân đối chuẩn)">
+                            <span>Vừa</span>
+                        </button>
+                        <button type="button" class="btn-density" data-density="spacious" title="Rộng rãi (Khoảng cách thoáng)">
+                            <span>Lớn</span>
+                        </button>
+                        <button type="button" class="btn-density-settings" id="btn-toggle-density-slider" title="Tùy chỉnh chi tiết kích thước ô bảng">
+                            ⚙️
+                        </button>
+                    </div>
+
+                    <!-- Detailed Custom Density Popover -->
+                    <div class="density-popover" id="density-popover">
+                        <div class="popover-header">
+                            <span style="font-weight:700;font-size:0.85rem;color:var(--cyan-400);">📏 Tùy Chỉnh Kích Thước Ô Bảng</span>
+                            <button class="popover-close" id="btn-close-density-popover" title="Đóng">×</button>
+                        </div>
+                        <div class="popover-body">
+                            <div class="slider-row">
+                                <div class="slider-label-row">
+                                    <span>Độ cao hàng (Dọc):</span>
+                                    <strong id="val-pad-y">9px</strong>
+                                </div>
+                                <input type="range" id="slider-pad-y" min="3" max="22" step="1" value="9" class="slider-styled">
+                            </div>
+                            <div class="slider-row">
+                                <div class="slider-label-row">
+                                    <span>Khoảng cách cột (Ngang):</span>
+                                    <strong id="val-pad-x">12px</strong>
+                                </div>
+                                <input type="range" id="slider-pad-x" min="4" max="24" step="1" value="12" class="slider-styled">
+                            </div>
+                            <div class="slider-row">
+                                <div class="slider-label-row">
+                                    <span>Cỡ chữ bảng (Font size):</span>
+                                    <strong id="val-font-size">12.5px</strong>
+                                </div>
+                                <input type="range" id="slider-font-size" min="10" max="16" step="0.5" value="12.5" class="slider-styled">
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; pt-2; border-top:1px solid rgba(255,255,255,0.08);">
+                                <button type="button" class="btn-subtle" id="btn-reset-density">Mặc định</button>
+                                <button type="button" class="btn-subtle-primary" id="btn-apply-density">Áp dụng</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Instant Refresh Button -->
+                <button class="btn-primary" id="btn-refresh" title="Cập nhật dữ liệu ngay lập tức">
+                    <svg class="btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    <span>Cập nhật ngay</span>
+                </button>
+
+                <!-- Export Data Button -->
+                <button class="btn-secondary" id="btn-export" title="Xuất báo cáo JSON">
+                    <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    <span>Xuất dữ liệu</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Top Navigation Tabs -->
+        <nav class="nav-tabs">
+            <button class="nav-tab active" data-tab="tab-usage">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="20" x2="18" y2="10"></line>
+                    <line x1="12" y1="20" x2="12" y2="4"></line>
+                    <line x1="6" y1="20" x2="6" y2="14"></line>
+                </svg>
+                <span>Nhật Ký & Điều Tra</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-quota">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+                <span>Hạn Mức & Tài Khoản (5h / Tuần)</span>
+                <span class="badge-new">QUOTA</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-leaderboard">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path>
+                    <path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path>
+                    <path d="M4 22h16"></path>
+                    <path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-2.34"></path>
+                    <path d="M18 17c0 .55-.45 1-1 1h-2c-.55 0-1-.45-1-1v-2.34"></path>
+                    <path d="M6 2h12v7a6 6 0 0 1-12 0V2Z"></path>
+                </svg>
+                <span>Bảng Xếp Hạng Models (Artificial Analysis đã xác minh)</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-models">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+                <span>Model Breakdown (Live)</span>
+                <span class="badge-new">NEW</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-task-outcomes">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path>
+                </svg>
+                <span>Hiệu Quả Theo Công Việc</span>
+                <span class="badge-new">BETA</span>
+            </button>
+        </nav>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-label">Cập nhật lần cuối:</span>
+                <span class="status-value" id="last-updated-time">Đang tải...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Nguồn dữ liệu:</span>
+                <span class="status-value" id="data-source-badge">Local Transcript Logs</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Tiêu chuẩn Benchmark:</span>
+                <span class="status-value highlight-cyan">ArtificialAnalysis.ai & Empirical Data</span>
+            </div>
+            <div class="status-item" id="countdown-wrapper" style="display:none;">
+                <span class="status-label">Làm mới sau:</span>
+                <span class="status-value highlight-cyan" id="countdown-timer">10s</span>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 1: SESSION INVESTIGATION ==================== -->
+        <div id="tab-usage" class="tab-pane active">
+            <section class="leaderboard-hero investigation-hero">
+                <div class="hero-tag">
+                    <span>🔎 SESSION FORENSICS & OUTLIER DETECTION</span>
+                </div>
+                <h2>Nhật Ký & Điều Tra Tiêu Hao</h2>
+                <p>
+                    Tìm những phiên dùng token, chi phí, thời gian hoặc tool calls cao bất thường so với các phiên cùng model.
+                    Mở từng phiên để xem lại các bước và xác định nguyên nhân tiêu hao.
+                </p>
+            </section>
+
+            <!-- Investigation Summary -->
+            <section class="summary-section">
+                <div class="summary-grid investigation-summary-grid" id="investigation-summary-grid">
+                    <!-- Rendered dynamically by JS -->
+                </div>
+            </section>
+
+            <!-- Sessions that need attention -->
+            <section class="section">
+                <div class="section-header investigation-section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            Phiên Đáng Kiểm Tra
+                        </h2>
+                        <p class="section-desc" id="anomaly-baseline-note">Đang xây dựng mức so sánh cho từng model...</p>
+                    </div>
+                    <span class="chart-badge anomaly-count-badge" id="anomaly-count-badge">0 phiên</span>
+                </div>
+
+                <div class="table-container">
+                    <table class="conv-table" id="anomaly-table">
+                        <thead>
+                            <tr>
+                                <th>Mã Phiên</th>
+                                <th>Model</th>
+                                <th>Tín Hiệu</th>
+                                <th class="num">Mức Lệch Cao Nhất</th>
+                                <th class="num">Tổng Tokens</th>
+                                <th class="num">Chi Phí</th>
+                                <th class="num">Thời Lượng</th>
+                                <th class="num">Tool Calls</th>
+                                <th>Bắt Đầu</th>
+                                <th class="action-col">Thao Tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="anomaly-tbody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Conversation Details Table Section -->
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            Toàn Bộ Nhật Ký Phiên Làm Việc
+                        </h2>
+                        <p class="section-desc">Lọc theo tín hiệu, model hoặc từ khóa rồi nhấp vào hàng để xem chi tiết từng bước.</p>
+                    </div>
+
+                    <!-- Table Controls (Search, Filter, Sort) -->
+                    <div class="table-actions">
+                        <div class="search-box">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            <input type="text" id="search-input" placeholder="Tìm theo prompt, model, ID...">
+                        </div>
+
+                        <select id="model-filter" class="select-styled">
+                            <option value="ALL">Tất cả Models</option>
+                        </select>
+
+                        <select id="session-signal-filter" class="select-styled">
+                            <option value="ALL">Tất cả tín hiệu</option>
+                            <option value="REVIEW">Cần kiểm tra</option>
+                            <option value="TOKENS">Token cao</option>
+                            <option value="COST">Chi phí cao</option>
+                            <option value="TOOLS">Nhiều tool calls</option>
+                            <option value="DURATION">Thời lượng cao</option>
+                            <option value="ERRORS">Có lỗi</option>
+                            <option value="MODEL_SWITCH">Đổi model</option>
+                        </select>
+
+                        <select id="sort-select" class="select-styled">
+                            <option value="anomaly-desc">Bất thường trước</option>
+                            <option value="date-desc">Mới nhất trước</option>
+                            <option value="date-asc">Cũ nhất trước</option>
+                            <option value="tokens-desc">Nhiều tokens nhất</option>
+                            <option value="tools-desc">Nhiều tool calls nhất</option>
+                            <option value="cost-desc">Chi phí cao nhất</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="conv-table" id="conv-table">
+                        <thead>
+                            <tr>
+                                <th>Mã Phiên</th>
+                                <th>Nguồn</th>
+                                <th>Yêu Cầu Ban Đầu (Prompt)</th>
+                                <th>Model Sử Dụng</th>
+                                <th>Thời Gian Bắt Đầu</th>
+                                <th>Thời Lượng</th>
+                                <th class="num">Tin Nhắn</th>
+                                <th class="num">Phản Hồi</th>
+                                <th class="num">Tool Calls</th>
+                                <th class="num">Input Tokens</th>
+                                <th class="num">Output Tokens</th>
+                                <th class="num">Ước Tính Phí</th>
+                                <th>Tín Hiệu</th>
+                                <th class="action-col">Thao Tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="conv-tbody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- ==================== TAB 2: QUOTA & MULTI-ACCOUNT MANAGER ==================== -->
+        <div id="tab-quota" class="tab-pane">
+            <!-- Quota Hero Banner -->
+            <section class="leaderboard-hero quota-hero">
+                <div class="hero-tag">
+                    <span>⏱️ RATE LIMITS, ROLLING WINDOWS & MULTI-ACCOUNT CONTROL</span>
+                </div>
+                <h2>Hạn Mức Sử Dụng Còn Lại & Quản Lý Tài Khoản</h2>
+                <p>
+                    Theo dõi chính xác mức tiêu tốn và <strong>hạn mức còn lại</strong> theo chu kỳ <strong>5 Giờ</strong> và <strong>Theo Tuần (7 Ngày)</strong>,
+                    tách biệt giữa <strong>Model Gemini</strong> và <strong>Model Ngoài</strong>, đồng thời quản lý các tài khoản Gmail đã đăng nhập.
+                </p>
+            </section>
+
+            <!-- Quota Source & Live Calibration Banner -->
+            <section class="section">
+                <div class="quota-source-banner">
+                    <div class="qsb-left">
+                        <div class="qsb-badge">
+                            <span class="badge-dot dot-green"></span>
+                            <span>ĐỒNG BỘ THÔNG SỐ CHUẨN (IDE SETTINGS)</span>
+                        </div>
+                        <h3 class="qsb-title">Hạn Mức Thời Gian Thực & Định Lượng Token</h3>
+                        <p class="qsb-desc">
+                            Hiển thị song song <strong>chỉ số chính xác từ IDE Settings</strong> và <strong>ước lượng tiêu thụ chi tiết theo token / lượt prompt</strong> từ nhật ký cục bộ.
+                        </p>
+                    </div>
+                    <div class="qsb-right">
+                        <button class="btn-primary" id="btn-open-calibrate" title="Cập nhật hoặc điều chỉnh tỷ lệ % hạn mức chuẩn">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="3"></circle>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                            </svg>
+                            <span>⚙️ Cập nhật % Quota Chuẩn</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Active Account Card & Switcher -->
+            <section class="section account-control-section">
+                <div class="account-card-main">
+                    <div class="account-card-left">
+                        <img id="quota-user-avatar" class="account-card-avatar" src="data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=" alt="User avatar">
+                        <div>
+                            <div class="account-card-title-row">
+                                <h3 id="quota-user-name">Local user</h3>
+                                <span class="badge-account-status" id="quota-account-status">Not connected</span>
+                            </div>
+                            <div class="account-card-email" id="quota-user-email">Not connected</div>
+                            <div class="account-card-tier" id="quota-user-tier">Plan: Not detected</div>
+                        </div>
+                    </div>
+                    <div class="account-card-right">
+                        <div class="control-group">
+                            <label class="control-label">Chuyển đổi tài khoản Gmail:</label>
+                            <select id="account-switcher-select" class="select-styled">
+                                <option value="">No account detected</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Multi-Source Gemini Breakdown Section -->
+            <section class="section" id="quota-source-summary-section">
+                <div class="quota-source-summary-banner">
+                    <div class="quota-source-header">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span class="brand-badge brand-google">GEMINI MULTI-SOURCE</span>
+                            <h3 style="font-size:0.95rem;font-weight:700;color:var(--text-main);">Nguồn Dữ Liệu Gemini (Antigravity IDE, Antigravity CLI &amp; Gemini CLI Official)</h3>
+                        </div>
+                        <span class="quota-source-notice" style="font-size:0.75rem;color:var(--text-secondary);">Hạn mức Gemini bên dưới kết hợp tổng tokens từ <strong>Antigravity IDE</strong>, <strong>Antigravity CLI</strong> và <strong>Gemini CLI (Official)</strong>.</span>
+                    </div>
+                    <div class="quota-source-grid" id="quota-source-grid">
+                        <!-- Populated dynamically by JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5-Hour Rolling Window Section -->
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            Khung Hạn Mức 5 Giờ (5-Hour Rolling Window)
+                        </h2>
+                        <p class="section-desc">Hạn mức hồi phục liên tục theo thời gian trôi qua. Tự động tính toán số tokens & lượt tương tác trong 5 giờ gần nhất.</p>
+                    </div>
+                    <div class="quota-reset-indicator" id="quota-5h-reset-box">
+                        <span class="reset-icon">⏳</span> Hồi phục lần đầu sau: <strong id="quota-5h-reset-time">~300 phút</strong>
+                    </div>
+                </div>
+
+                <div class="quota-cards-grid">
+                    <!-- Gemini 5h Card -->
+                    <div class="quota-card quota-gemini">
+                        <div class="quota-card-header">
+                            <div class="quota-model-brand">
+                                <span class="brand-badge brand-google">GOOGLE</span>
+                                <h3>Model Gemini (5 Giờ)</h3>
+                            </div>
+                            <span class="quota-status-pill pill-success" id="gemini-5h-status">Bình Thường</span>
+                        </div>
+
+                        <div class="quota-body">
+                            <div class="quota-metric-main">
+                                <div class="quota-big-val" id="gemini-5h-pct">--%</div>
+                                <div class="quota-big-label">Hạn Mức Còn Lại</div>
+                            </div>
+
+                            <div class="quota-progress-bar-wrap">
+                                <div class="quota-progress-bar" id="gemini-5h-bar" style="width: 100%;"></div>
+                            </div>
+
+                            <div class="quota-stats-grid">
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Đã Dùng (5h)</span>
+                                    <span class="q-stat-val" id="gemini-5h-used">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Còn Lại</span>
+                                    <span class="q-stat-val q-rem" id="gemini-5h-rem">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Giới Hạn Tối Đa</span>
+                                    <span class="q-stat-val" id="gemini-5h-limit">500,000</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Lượt Request (5h)</span>
+                                    <span class="q-stat-val" id="gemini-5h-reqs">--</span>
+                                </div>
+                            </div>
+
+                            <div class="quota-reset-indicator" style="margin-top:14px;padding:9px 12px;background:rgba(0,240,255,0.04);border:1px solid rgba(0,240,255,0.12);border-radius:8px;font-size:0.8rem;display:flex;align-items:center;justify-content:space-between;">
+                                <span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-400)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    Mốc giờ hồi 100%:
+                                </span>
+                                <strong id="gemini-5h-reset-clock" style="color:var(--cyan-400);font-family:'JetBrains Mono',monospace;">--</strong>
+                            </div>
+
+                            <button class="btn-quick-reset" onclick="quickResetCycle('gemini_5h')" style="margin-top:10px; width:100%; padding:6px 12px; background:rgba(0,240,255,0.08); border:1px solid rgba(0,240,255,0.25); color:var(--cyan-400); border-radius:6px; font-size:0.78rem; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; transition:all 0.2s ease;">
+                                <span>🔄 Vừa Reset Chu Kỳ 5H (Bắt Đầu Đếm Mới)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- External Models 5h Card -->
+                    <div class="quota-card quota-external">
+                        <div class="quota-card-header">
+                            <div class="quota-model-brand">
+                                <span class="brand-badge brand-anthropic">MODEL NGOÀI</span>
+                                <h3>Claude & External (5 Giờ)</h3>
+                            </div>
+                            <span class="quota-status-pill pill-success" id="external-5h-status">Bình Thường</span>
+                        </div>
+
+                        <div class="quota-body">
+                            <div class="quota-metric-main">
+                                <div class="quota-big-val" id="external-5h-pct">--%</div>
+                                <div class="quota-big-label">Hạn Mức Còn Lại</div>
+                            </div>
+
+                            <div class="quota-progress-bar-wrap">
+                                <div class="quota-progress-bar q-bar-purple" id="external-5h-bar" style="width: 100%;"></div>
+                            </div>
+
+                            <div class="quota-stats-grid">
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Đã Dùng (5h)</span>
+                                    <span class="q-stat-val" id="external-5h-used">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Còn Lại</span>
+                                    <span class="q-stat-val q-rem" id="external-5h-rem">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Giới Hạn Tối Đa</span>
+                                    <span class="q-stat-val" id="external-5h-limit">60,000</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Lượt Request (5h)</span>
+                                    <span class="q-stat-val" id="external-5h-reqs">--</span>
+                                </div>
+                            </div>
+
+                            <div class="quota-reset-indicator" style="margin-top:14px;padding:9px 12px;background:rgba(168,85,247,0.04);border:1px solid rgba(168,85,247,0.15);border-radius:8px;font-size:0.8rem;display:flex;align-items:center;justify-content:space-between;">
+                                <span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--purple-400)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    Mốc giờ hồi 100%:
+                                </span>
+                                <strong id="external-5h-reset-clock" style="color:var(--purple-400);font-family:'JetBrains Mono',monospace;">--</strong>
+                            </div>
+
+                            <button class="btn-quick-reset" onclick="quickResetCycle('external_5h')" style="margin-top:10px; width:100%; padding:6px 12px; background:rgba(168,85,247,0.08); border:1px solid rgba(168,85,247,0.25); color:var(--purple-400); border-radius:6px; font-size:0.78rem; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; transition:all 0.2s ease;">
+                                <span>🔄 Vừa Reset Chu Kỳ 5H (Bắt Đầu Đếm Mới)</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Weekly Rolling Window Section -->
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                            Khung Hạn Mức Theo Tuần (7-Day Weekly Window)
+                        </h2>
+                        <p class="section-desc">Tổng ngân sách và hạn mức tiêu thụ được reset / cộng dồn theo chu kỳ tuần.</p>
+                    </div>
+                </div>
+
+                <div class="quota-cards-grid">
+                    <!-- Gemini Weekly -->
+                    <div class="quota-card quota-gemini">
+                        <div class="quota-card-header">
+                            <div class="quota-model-brand">
+                                <span class="brand-badge brand-google">GOOGLE</span>
+                                <h3>Model Gemini (Tuần)</h3>
+                            </div>
+                            <span class="quota-status-pill pill-info">Chu Kỳ 7 Ngày</span>
+                        </div>
+
+                        <div class="quota-body">
+                            <div class="quota-metric-main">
+                                <div class="quota-big-val" id="gemini-wk-pct">--%</div>
+                                <div class="quota-big-label">Hạn Mức Còn Lại (Tuần)</div>
+                            </div>
+
+                            <div class="quota-progress-bar-wrap">
+                                <div class="quota-progress-bar" id="gemini-wk-bar" style="width: 100%;"></div>
+                            </div>
+
+                            <div class="quota-stats-grid">
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Đã Dùng (7 Ngày)</span>
+                                    <span class="q-stat-val" id="gemini-wk-used">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Còn Lại (Tuần)</span>
+                                    <span class="q-stat-val q-rem" id="gemini-wk-rem">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Giới Hạn Tuần</span>
+                                    <span class="q-stat-val" id="gemini-wk-limit">2,500,000</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Lượt Request</span>
+                                    <span class="q-stat-val" id="gemini-wk-reqs">--</span>
+                                </div>
+                            </div>
+
+                            <div class="quota-reset-indicator" style="margin-top:14px;padding:9px 12px;background:rgba(0,240,255,0.04);border:1px solid rgba(0,240,255,0.12);border-radius:8px;font-size:0.8rem;display:flex;align-items:center;justify-content:space-between;">
+                                <span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-400)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    Mốc reset tuần (100%):
+                                </span>
+                                <strong id="gemini-wk-reset-clock" style="color:var(--cyan-400);font-family:'JetBrains Mono',monospace;">--</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- External Weekly -->
+                    <div class="quota-card quota-external">
+                        <div class="quota-card-header">
+                            <div class="quota-model-brand">
+                                <span class="brand-badge brand-anthropic">MODEL NGOÀI</span>
+                                <h3>Claude & External (Tuần)</h3>
+                            </div>
+                            <span class="quota-status-pill pill-info">Chu Kỳ 7 Ngày</span>
+                        </div>
+
+                        <div class="quota-body">
+                            <div class="quota-metric-main">
+                                <div class="quota-big-val" id="external-wk-pct">--%</div>
+                                <div class="quota-big-label">Hạn Mức Còn Lại (Tuần)</div>
+                            </div>
+
+                            <div class="quota-progress-bar-wrap">
+                                <div class="quota-progress-bar q-bar-purple" id="external-wk-bar" style="width: 100%;"></div>
+                            </div>
+
+                            <div class="quota-stats-grid">
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Đã Dùng (7 Ngày)</span>
+                                    <span class="q-stat-val" id="external-wk-used">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Còn Lại (Tuần)</span>
+                                    <span class="q-stat-val q-rem" id="external-wk-rem">--</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Giới Hạn Tuần</span>
+                                    <span class="q-stat-val" id="external-wk-limit">250,000</span>
+                                </div>
+                                <div class="q-stat">
+                                    <span class="q-stat-label">Lượt Request</span>
+                                    <span class="q-stat-val" id="external-wk-reqs">--</span>
+                                </div>
+                            </div>
+
+                            <div class="quota-reset-indicator" style="margin-top:14px;padding:9px 12px;background:rgba(168,85,247,0.04);border:1px solid rgba(168,85,247,0.15);border-radius:8px;font-size:0.8rem;display:flex;align-items:center;justify-content:space-between;">
+                                <span style="color:var(--text-muted);display:flex;align-items:center;gap:6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--purple-400)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    Mốc reset tuần (100%):
+                                </span>
+                                <strong id="external-wk-reset-clock" style="color:var(--purple-400);font-family:'JetBrains Mono',monospace;">--</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Live Codex Rate Limits Section -->
+            <section class="section" id="codex-rate-limits-section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                                <rect x="3" y="3" width="7" height="7"></rect>
+                                <rect x="14" y="3" width="7" height="7"></rect>
+                                <rect x="14" y="14" width="7" height="7"></rect>
+                                <rect x="3" y="14" width="7" height="7"></rect>
+                            </svg>
+                            Hạn Mức Codex Thời Gian Thực (Codex Rate Limits)
+                        </h2>
+                        <p class="section-desc">Cập nhật hạn mức và mốc reset trực tiếp từ Codex. Bản ghi phiên làm việc được dùng dự phòng khi không kết nối được.</p>
+                    </div>
+                    <div class="quota-reset-indicator" id="codex-freshness-box" style="display:none;background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);color:var(--emerald-400);">
+                        <span class="reset-icon">📡</span> <span id="codex-freshness-label">Đang kiểm tra nguồn dữ liệu</span>
+                    </div>
+                </div>
+
+                <div class="quota-cards-grid" id="codex-rate-limit-cards">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </section>
+
+            <!-- Quota History, Capacity & Policy Shift Section -->
+            <section class="section">
+                <div class="section-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                            Lịch Sử Hạn Mức & Biến Động Theo Thời Gian
+                        </h2>
+                        <p class="section-desc">Theo dõi khung 5 giờ, khung tuần, quá trình hội tụ trần hạn mức và các lần thay đổi chính sách được phát hiện.</p>
+                    </div>
+                    <!-- View Switcher -->
+                    <div class="ts-view-switcher">
+                        <button class="btn-ts-toggle active" id="btn-ts-view-5h">⏱️ Khung 5 Giờ</button>
+                        <button class="btn-ts-toggle" id="btn-ts-view-weekly">📅 Khung 1 Tuần</button>
+                        <button class="btn-ts-toggle" id="btn-ts-view-capacity">📊 Biến Thiên Tổng Hạn Mức (Max Capacity)</button>
+                        <button class="btn-ts-toggle" id="btn-ts-view-snapshots">📋 Nhật Ký Điểm Đo</button>
+                    </div>
+                </div>
+
+                <!-- 1. View: 5-Hour Rolling Timeline -->
+                <div id="ts-view-5h" class="ts-view-pane active">
+                    <div class="chart-card" style="padding:20px;">
+                        <div class="chart-header" style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <h3>Biểu Đồ Sóng Tiêu Thụ Khung 5 Giờ (15 Phút/Điểm)</h3>
+                                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px;">
+                                    Đường diện tích dạng sóng phản ánh biến thiên token và vạch trần hạn mức Pro
+                                </div>
+                            </div>
+                            <span class="chart-badge" id="ts-5h-used-badge" style="background:rgba(6,182,212,0.15);color:var(--cyan-400);border:1px solid rgba(6,182,212,0.3);font-weight:700;">Đang tính toán...</span>
+                        </div>
+                        <div style="position:relative;width:100%;height:270px;margin-top:12px;">
+                            <canvas id="canvas-5h-timeseries"></canvas>
+                        </div>
+                        <div class="chart-legend" style="margin-top:12px;display:flex;gap:16px;justify-content:center;">
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--cyan-400);"></div> Gemini (5h)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--amber-400);"></div> Model Ngoài (5h)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--rose-500);border-radius:0;height:2px;"></div> Vạch Hạn Mức Giới Hạn</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. View: Weekly 7-Day Timeline -->
+                <div id="ts-view-weekly" class="ts-view-pane" style="display:none;">
+                    <div class="chart-card" style="padding:20px;">
+                        <div class="chart-header" style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <h3>Biểu Đồ Cột & Xu Hướng Tiêu Thụ Khung 1 Tuần (7 Ngày Qua)</h3>
+                                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px;">
+                                    Phân bổ lượng token theo từng ngày trong tuần giữa Gemini và Model Ngoài
+                                </div>
+                            </div>
+                            <span class="chart-badge" id="ts-wk-used-badge" style="background:rgba(99,102,241,0.15);color:var(--indigo-400);border:1px solid rgba(99,102,241,0.3);font-weight:700;">Đang tính toán...</span>
+                        </div>
+                        <div style="position:relative;width:100%;height:270px;margin-top:12px;">
+                            <canvas id="canvas-weekly-timeseries"></canvas>
+                        </div>
+                        <div class="chart-legend" style="margin-top:12px;display:flex;gap:16px;justify-content:center;">
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--cyan-400);"></div> Gemini Hàng Ngày</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--amber-400);"></div> Model Ngoài Hàng Ngày</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--amber-500);border-radius:0;height:2px;"></div> Vạch Hạn Mức Tuần</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. View: Capacity Evolution & Policy Shift Detector -->
+                <div id="ts-view-capacity" class="ts-view-pane" style="display:none;">
+                    <div class="chart-card" style="padding:20px;">
+                        <div class="chart-header" style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <h3>Biểu Đồ Hội Tụ Trần Dung Lượng Tối Đa (Max Capacity Evolution)</h3>
+                                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px;">
+                                    Mỗi điểm là một lần calibration thực tế; đường recent-cycle giúp phát hiện sớm khi trần mới lệch khỏi bộ hội tụ dài hạn
+                                </div>
+                                <div id="ts-cap-evidence-note" style="font-size:0.76rem;color:var(--text-muted);margin-top:4px;">Đang tải evidence/confidence...</div>
+                            </div>
+                            <span class="chart-badge" id="ts-cap-badge" style="background:rgba(168,85,247,0.15);color:var(--purple-400);border:1px solid rgba(168,85,247,0.3);font-weight:700;">Đang tính toán...</span>
+                        </div>
+                        <div style="position:relative;width:100%;height:270px;margin-top:12px;">
+                            <canvas id="canvas-capacity-evolution"></canvas>
+                        </div>
+                        <div class="chart-legend" style="margin-top:12px;display:flex;gap:16px;justify-content:center;">
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--cyan-400);"></div> Transcript-estimated capacity (5h)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--rose-400);"></div> Recent-cycle early candidate (5h)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--purple-400);"></div> Exact worker capacity (5h)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--amber-400);"></div> Mixed capacity (source-mix dependent)</div>
+                        </div>
+                    </div>
+
+                    <div class="chart-card" style="padding:20px;margin-top:16px;">
+                        <div class="chart-header" style="display:flex;justify-content:space-between;align-items:center;">
+                            <div>
+                                <h3>Weekly Capacity Evolution (7-Day)</h3>
+                                <div style="font-size:0.78rem;color:var(--text-muted);margin-top:2px;">
+                                    Transcript và exact worker được giữ riêng; mixed capacity chỉ là bằng chứng phụ thuộc source mix.
+                                </div>
+                            </div>
+                            <span class="chart-badge" id="ts-cap-weekly-badge" style="background:rgba(168,85,247,0.15);color:var(--purple-400);border:1px solid rgba(168,85,247,0.3);font-weight:700;">Đang tính toán...</span>
+                        </div>
+                        <div style="position:relative;width:100%;height:270px;margin-top:12px;">
+                            <canvas id="canvas-capacity-evolution-weekly"></canvas>
+                        </div>
+                        <div class="chart-legend" style="margin-top:12px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap;">
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--cyan-400);"></div> Transcript-estimated capacity (weekly)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--rose-400);"></div> Recent-cycle early candidate (weekly)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--purple-400);"></div> Exact worker capacity (weekly)</div>
+                            <div class="legend-item"><div class="legend-dot" style="background:var(--amber-400);"></div> Mixed capacity (source-mix dependent)</div>
+                        </div>
+                    </div>
+
+                    <!-- Policy Shifts & Empirical Evidence Audit Table -->
+                    <div class="table-card" style="margin-top:16px;padding:0;overflow:hidden;border:1px solid var(--border-color);border-radius:12px;">
+                        <div style="padding:16px 20px;background:var(--bg-surface-2);border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
+                            <h3 style="font-size:0.95rem;margin:0;font-weight:700;">Bằng Chứng & Lịch Sử Biến Động Hạn Mức Nhà Cung Cấp (Policy Shift Audit Log)</h3>
+                            <span style="font-size:0.78rem;color:var(--text-muted);">Cảnh báo khi thay đổi ≥15% được xác nhận bởi ≥2 điểm recent-cycle độc lập hoặc ≥2 calibration points hội tụ</span>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Mốc Phát Hiện</th>
+                                        <th>Nhà Cung Cấp</th>
+                                        <th>Hạn Mức</th>
+                                        <th>Loại Biến Động</th>
+                                        <th>Dung Lượng Cũ → Mới</th>
+                                        <th>Ghi Chú Bằng Chứng</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="policy-shifts-table-body">
+                                    <!-- Rendered dynamically by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. View: Snapshots Log Table -->
+                <div id="ts-view-snapshots" class="ts-view-pane" style="display:none;">
+                    <div class="table-card" style="padding:0;overflow:hidden;border:1px solid var(--border-color);border-radius:12px;">
+                        <div style="padding:16px 20px;background:var(--bg-surface-2);border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;">
+                            <h3 style="font-size:0.95rem;margin:0;font-weight:700;">Nhật Ký Điểm Đo Snapshot Thời Gian Thực</h3>
+                            <span style="font-size:0.78rem;color:var(--text-muted);">Tự động lấy mẫu snapshot mỗi khi có tác vụ mới</span>
+                        </div>
+                        <div class="table-responsive" style="max-height:340px;overflow-y:auto;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Mốc Thời Gian</th>
+                                        <th>Model Đang Chạy</th>
+                                        <th>Token Đã Dùng 5H</th>
+                                        <th>% Còn Lại 5H</th>
+                                        <th>Token Đã Dùng Tuần</th>
+                                        <th>% Còn Lại Tuần</th>
+                                        <th>Trạng Thái</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ts-snapshots-table-body">
+                                    <!-- Rendered dynamically by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+
+            <!-- Saved Accounts History & Multi-Account List -->
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                            Danh Sách Các Tài Khoản Gmail Đã Đăng Nhập
+                        </h2>
+                        <p class="section-desc">Hệ thống tự động ghi nhớ và lưu giữ danh mục các tài khoản Gmail từng sử dụng kèm hạn mức riêng biệt.</p>
+                    </div>
+                    <button class="btn-primary" id="btn-open-add-account" title="Thêm tài khoản Gmail mới vào danh sách">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"></line>
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                        </svg>
+                        <span>+ Thêm Tài Khoản Gmail</span>
+                    </button>
+                </div>
+
+                <div class="table-container">
+                    <table class="conv-table">
+                        <thead>
+                            <tr>
+                                <th>Tài Khoản Gmail</th>
+                                <th>Họ & Tên</th>
+                                <th>Gói Tài Khoản</th>
+                                <th>Hạn Mức 5h (Gemini / Ngoài)</th>
+                                <th>Hạn Mức Tuần (Gemini / Ngoài)</th>
+                                <th>Lần Hoạt Động Gần Nhất</th>
+                                <th>Trạng Thái</th>
+                                <th>Thao Tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-tbody">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- ==================== TAB 3: ARTIFICIAL ANALYSIS LEADERBOARD ==================== -->
+        <div id="tab-leaderboard" class="tab-pane">
+            <!-- Leaderboard Header Banner -->
+            <section class="leaderboard-hero">
+                <div class="hero-tag">
+                    <span>⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v4.3 • CẬP NHẬT 09/09/2026</span>
+                </div>
+                <h2>Bảng Xếp Hạng Models — Chọn Model Theo Việc Cần Làm</h2>
+                <p>
+                    Điểm trí tuệ, tốc độ và chi phí/task lấy từ <strong>Artificial Analysis v4.3</strong>; nhãn “ước tính” được giữ nguyên khi AA chưa hoàn tất đo độc lập.
+                    Mỗi dòng còn ghép với <strong>token, chi phí all-time và quota/task đo từ log cục bộ</strong> để hỗ trợ quyết định thực tế.
+                </p>
+            </section>
+
+            <!-- Leaderboard Top Highlights -->
+            <section class="summary-section">
+                <div class="summary-grid" id="leaderboard-highlights">
+                    <!-- Populated dynamically -->
+                </div>
+            </section>
+
+            <!-- Benchmark Charts Row -->
+            <section class="section">
+                <div class="section-header">
+                    <h2 class="section-title">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
+                        So Sánh Intelligence Index v4.3 Và Tốc Độ Output
+                    </h2>
+                </div>
+
+                <div class="charts-row">
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>Intelligence Index v4.3</h3>
+                            <span class="chart-badge">Higher is better</span>
+                        </div>
+                        <canvas id="leaderboard-iq-chart"></canvas>
+                    </div>
+                    <div class="chart-card">
+                        <div class="chart-header">
+                            <h3>Tốc Độ Sinh Token (Output Tokens/giây)</h3>
+                            <span class="chart-badge">Tokens / sec</span>
+                        </div>
+                        <canvas id="leaderboard-speed-chart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Comprehensive Leaderboard Table -->
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 17c0 .55-.45 1-1 1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M6 2h12v7a6 6 0 0 1-12 0V2Z"></path></svg>
+                            Bảng Quyết Định Model
+                        </h2>
+                        <p class="section-desc">Mặc định chỉ hiện sáu lựa chọn có ích nhất. Mở “Tất cả AA v4.3” để xem các biến thể hiện tại và lịch sử.</p>
+                    </div>
+
+                    <div class="table-actions leaderboard-controls">
+                        <span id="leaderboard-result-count" class="leaderboard-result-count">0 biến thể</span>
+                        <select id="leaderboard-scope-select" class="select-styled" aria-label="Phạm vi model">
+                            <option value="recommended">Phạm vi: Khuyến nghị</option>
+                            <option value="current">Phạm vi: Thế hệ hiện tại</option>
+                            <option value="local">Phạm vi: Đã dùng cục bộ</option>
+                            <option value="all">Phạm vi: Tất cả AA v4.3</option>
+                        </select>
+                        <select id="leaderboard-family-select" class="select-styled" aria-label="Họ model">
+                            <option value="all">Họ model: Tất cả</option>
+                            <option value="Astra">Astra</option>
+                            <option value="Sol">Sol</option>
+                            <option value="Terra">Terra</option>
+                            <option value="Luna">Luna</option>
+                            <option value="Gemini 3.8">Gemini 3.8</option>
+                            <option value="Gemini 3.7">Gemini 3.7</option>
+                            <option value="Gemini 3.6">Gemini 3.6</option>
+                            <option value="GPT-5.5">GPT-5.5</option>
+                            <option value="GPT-5.4">GPT-5.4</option>
+                        </select>
+                        <select id="leaderboard-sort-select" class="select-styled">
+                            <option value="recommendation">Xếp theo: Khuyến nghị</option>
+                            <option value="iq-desc">Xếp theo: Intelligence cao nhất</option>
+                            <option value="speed-desc">Xếp theo: Tốc độ cao nhất</option>
+                            <option value="value-desc">Xếp theo: IQ/$task cao nhất</option>
+                            <option value="cost-asc">Xếp theo: AA cost/task thấp nhất</option>
+                            <option value="quota-task-asc">Xếp theo: Quota/task thấp nhất</option>
+                            <option value="usage-desc">Xếp theo: Token cục bộ nhiều nhất</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="table-container">
+                    <table class="conv-table" id="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Hạng AA</th>
+                                <th>Model, nguồn & trạng thái</th>
+                                <th class="num">Intelligence v4.3</th>
+                                <th class="num">Tốc độ</th>
+                                <th class="num">AA cost/task & IQ/$</th>
+                                <th class="num">API $/1M In · Cache · Out</th>
+                                <th class="num">Quota cục bộ</th>
+                                <th class="num">All-time cục bộ</th>
+                                <th>Quyết định sử dụng</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-tbody">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Model Cards Deep Dive -->
+            <section class="section">
+                <div class="section-header">
+                    <h2 class="section-title">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+                        Khuyến Nghị Chọn Model Cho Từng Nhu Cầu (Model Recommender)
+                    </h2>
+                </div>
+                <div class="model-cards-grid" id="model-cards-grid">
+                    <!-- Populated dynamically -->
+                </div>
+            </section>
+        </div>
+
+        <!-- ==================== TAB 4: MODEL BREAKDOWN (LIVE) ==================== -->
+        <div id="tab-models" class="tab-pane">
+            <!-- Model Breakdown Hero -->
+            <section class="leaderboard-hero" style="border-image: linear-gradient(135deg, #10b981, #06b6d4, #6366f1) 1;">
+                <div class="hero-tag">
+                    <span>📊 LIVE MODEL USAGE BREAKDOWN — ANTIGRAVITY + CODEX</span>
+                </div>
+                <h2>Thống Kê Chi Tiết Từng Model & Mức Suy Luận</h2>
+                <p>
+                    Mỗi tổ hợp <strong>tên model + mức suy luận</strong> (ví dụ: "Gemini 3.7 Flash High", "5.6 sol high", "o3 xhigh") được tính là 1 model riêng biệt.
+                    Dữ liệu Antigravity và Codex được tự động quét từ log cục bộ real-time; dữ liệu nhập thủ công chỉ dùng làm nguồn dự phòng (Manual fallback).
+                </p>
+            </section>
+
+            <!-- Model Breakdown Summary Cards -->
+            <section class="summary-section">
+                <div class="summary-grid" id="models-summary-grid">
+                    <!-- Populated dynamically -->
+                </div>
+            </section>
+
+            <!-- Codex Actions Bar -->
+            <section class="section" style="margin-bottom: 0;">
+                <div class="section-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                    <h2 class="section-title">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        Bảng Phân Tích Theo Từng Model
+                    </h2>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button class="btn-primary" id="btn-add-codex-model" onclick="openCodexModal()">
+                            <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                            <span>+ Thêm Model Codex</span>
+                        </button>
+                        <button class="btn-secondary" id="btn-set-codex-limit" onclick="openCodexLimitModal()">
+                            <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            <span>Cài Hạn Mức Codex</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Multi-Model Daily Stacked Bar Chart Card -->
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card" style="padding: 1.25rem 1.5rem; border: 1px solid var(--border-color, rgba(255,255,255,0.08)); border-radius: 12px; background: var(--card-bg, rgba(255,255,255,0.02)); box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <h3 style="font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">
+                                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #06b6d4; box-shadow: 0 0 8px #06b6d4;"></span>
+                        Biểu Đồ Xu Hướng Tiêu Thụ Tokens Theo Model <span id="model-timeline-range-label" style="color:var(--text-muted,#94a3b8);font-weight:500;">(7 Ngày Qua)</span>
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted, #888); margin: 4px 0 0 0;">
+                        Cột chồng thể hiện tổng tokens theo đơn vị thời gian đã chọn; từng phần màu cho biết lượng tokens của từng model.
+                            </p>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;">
+                            <select id="model-timeline-range" aria-label="Khoảng thời gian biểu đồ model" style="background:rgba(15,23,42,0.9);color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:6px 9px;font-size:0.8rem;">
+                                <option value="7">7 ngày qua</option>
+                                <option value="30">30 ngày qua</option>
+                                <option value="90">90 ngày qua</option>
+                                <option value="180">180 ngày qua</option>
+                                <option value="365">1 năm qua</option>
+                                <option value="custom">Tùy chọn</option>
+                            </select>
+                            <label for="model-timeline-granularity" style="font-size:0.78rem;color:var(--text-muted,#94a3b8);">Hiển thị theo</label>
+                            <select id="model-timeline-granularity" aria-label="Đơn vị thời gian biểu đồ model" style="background:rgba(15,23,42,0.9);color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:6px 9px;font-size:0.8rem;">
+                                <option value="day">Ngày</option>
+                                <option value="month">Tháng</option>
+                                <option value="year">Năm</option>
+                            </select>
+                            <div id="model-timeline-custom" style="display:none;flex-wrap:wrap;gap:6px;align-items:center;">
+                                <input id="model-timeline-start" type="date" aria-label="Ngày bắt đầu" style="background:rgba(15,23,42,0.9);color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:5px 7px;font-size:0.78rem;">
+                                <span style="color:var(--text-muted,#94a3b8);font-size:0.78rem;">đến</span>
+                                <input id="model-timeline-end" type="date" aria-label="Ngày kết thúc" style="background:rgba(15,23,42,0.9);color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:5px 7px;font-size:0.78rem;">
+                                <button id="model-timeline-apply" type="button" style="cursor:pointer;padding:6px 10px;border-radius:7px;border:1px solid rgba(6,182,212,0.45);background:rgba(6,182,212,0.12);color:#67e8f9;font-size:0.78rem;font-weight:600;">Áp dụng</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="models-daily-chart-legend" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 0.7rem;">
+                        <!-- Dynamic Model Legend items rendered by app.js -->
+                    </div>
+                    <div class="model-timeline-chart-frame">
+                        <div class="model-timeline-fixed-axis" aria-hidden="true">
+                            <canvas id="canvas-models-daily-stacked-axis"></canvas>
+                        </div>
+                        <div id="models-daily-chart-scroll" class="model-timeline-scroll" tabindex="0" aria-label="Dữ liệu biểu đồ token theo thời gian, cuộn ngang">
+                            <div id="models-daily-chart-stage" class="model-timeline-stage">
+                                <canvas id="canvas-models-daily-stacked"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="model-timeline-scroll-hint">Kéo thanh ngang để xem các mốc thời gian cũ hơn; biểu đồ mở ở mốc mới nhất.</div>
+                </div>
+            </section>
+
+            <!-- Multi-Model Daily Cost Stacked Bar Chart Card -->
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card" style="padding: 1.25rem 1.5rem; border: 1px solid var(--border-color, rgba(255,255,255,0.08)); border-radius: 12px; background: var(--card-bg, rgba(255,255,255,0.02)); box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <h3 style="font-size: 1.1rem; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px;">
+                                <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 8px #f59e0b;"></span>
+                                Biểu Đồ Xu Hướng Chi Phí Theo Model <span id="model-cost-range-label" style="color:var(--text-muted,#94a3b8);font-weight:500;">(7 Ngày Qua)</span>
+                            </h3>
+                            <p style="font-size: 0.82rem; color: var(--text-muted, #888); margin: 4px 0 0 0;">
+                                Cột chồng thể hiện chi phí API ước tính và dùng cùng khoảng thời gian cùng đơn vị Ngày / Tháng / Năm với biểu đồ tokens phía trên.
+                            </p>
+                            <p id="model-cost-coverage" style="font-size: 0.76rem; color: #86efac; margin: 4px 0 0 0;"></p>
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:flex-end;">
+                            <label for="model-cost-unit" style="font-size:0.78rem;color:var(--text-muted,#94a3b8);">Đơn vị</label>
+                            <select id="model-cost-unit" aria-label="Đơn vị biểu đồ chi phí model" style="background:rgba(15,23,42,0.9);color:#e2e8f0;border:1px solid rgba(255,255,255,0.12);border-radius:7px;padding:6px 9px;font-size:0.8rem;">
+                                <option value="usd">USD</option>
+                                <option value="credit">Credit chuẩn hóa</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="font-size:0.75rem;color:var(--text-muted,#94a3b8);margin-bottom:0.7rem;">
+                        Credit chuẩn hóa là đơn vị nội bộ cố định: <strong style="color:#cbd5e1;">1 credit = $0.01 chi phí API ước tính</strong>. Đây không phải credit thanh toán chính thức của OpenAI.
+                    </div>
+                    <div id="models-daily-cost-chart-legend" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 0.7rem;">
+                        <!-- Dynamic Model Cost Legend items rendered by app.js -->
+                    </div>
+                    <div class="model-timeline-chart-frame">
+                        <div class="model-timeline-fixed-axis" aria-hidden="true">
+                            <canvas id="canvas-models-daily-cost-stacked-axis"></canvas>
+                        </div>
+                        <div id="models-daily-cost-chart-scroll" class="model-timeline-scroll" tabindex="0" aria-label="Dữ liệu biểu đồ chi phí theo thời gian, cuộn ngang">
+                            <div id="models-daily-cost-chart-stage" class="model-timeline-stage">
+                                <canvas id="canvas-models-daily-cost-stacked"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="model-timeline-scroll-hint">Kéo thanh ngang để xem các mốc thời gian cũ hơn; biểu đồ mở ở mốc mới nhất.</div>
+                </div>
+            </section>
+
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card quota-timeline-card">
+                    <div class="quota-timeline-header">
+                        <div>
+                            <h3>Biến Động Hiệu Suất Hạn Mức 5h Theo Thời Gian</h3>
+                            <p id="codex-quota-timeline-note">
+                                Median trượt cục bộ; mỗi điểm so model với Sol High trong cùng cửa sổ thời gian. Đây là số đo thực nghiệm từ log, không phải trọng số chính thức của OpenAI.
+                            </p>
+                        </div>
+                        <div class="quota-timeline-controls">
+                            <label for="codex-quota-timeline-range">Phạm vi</label>
+                            <select id="codex-quota-timeline-range" aria-label="Phạm vi biểu đồ hiệu suất hạn mức">
+                                <option value="7">7 ngày</option>
+                                <option value="30" selected>30 ngày</option>
+                                <option value="90">90 ngày</option>
+                            </select>
+                            <label for="codex-quota-timeline-window">Cửa sổ</label>
+                            <select id="codex-quota-timeline-window" aria-label="Cửa sổ median trượt">
+                                <option value="1">1 ngày · nhạy</option>
+                                <option value="3" selected>3 ngày · cân bằng</option>
+                                <option value="7">7 ngày · ổn định</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="codex-quota-timeline-status" class="quota-timeline-status"></div>
+                    <div id="codex-quota-timeline-legend" class="quota-timeline-legend"></div>
+                    <div class="quota-timeline-canvas-wrap">
+                        <canvas id="canvas-codex-quota-timeline"></canvas>
+                    </div>
+                    <div class="table-container quota-timeline-table-wrap">
+                        <table class="data-table" id="codex-quota-efficiency-recent-table">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:180px;">Model + Effort</th>
+                                    <th class="num" style="min-width:145px;" title="Hệ số gần nhất so với Sol High trong cùng cửa sổ. Lớn hơn 1× nghĩa là đốt quota nhanh hơn trên cùng raw token.">Gần Nhất vs Sol High</th>
+                                    <th class="num" style="min-width:125px;">Cửa Sổ Trước</th>
+                                    <th class="num" style="min-width:115px;">Biến Động</th>
+                                    <th class="num" style="min-width:130px;">Tokens / 1% 5h</th>
+                                    <th class="num" style="min-width:120px;">Mẫu Model / Sol</th>
+                                    <th style="min-width:125px;" title="Đánh giá theo số khoảng đo, số phiên độc lập và tổng quota quan sát của cả model lẫn Sol High. Lấy mức thấp hơn của hai bên.">Độ Tin Cậy</th>
+                                    <th style="min-width:155px;">Ghi Nhận Gần Nhất</th>
+                                </tr>
+                            </thead>
+                            <tbody id="codex-quota-efficiency-recent-body">
+                                <tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu cục bộ có Sol High cùng thời điểm để so sánh.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card quota-timeline-card task-quota-timeline-card">
+                    <div class="quota-timeline-header">
+                        <div>
+                            <h3>Biến Động Tiêu Hao Hạn Mức 5h Theo Task</h3>
+                            <p id="codex-task-timeline-note">
+                                Median trượt của các task hoàn tất; mỗi điểm so model với Sol High trong cùng cửa sổ và chỉ hiện khi mỗi bên có ít nhất 5 task hợp lệ.
+                            </p>
+                        </div>
+                        <div class="quota-timeline-controls">
+                            <label for="codex-task-timeline-range">Phạm vi</label>
+                            <select id="codex-task-timeline-range" aria-label="Phạm vi biểu đồ tiêu hao hạn mức theo task">
+                                <option value="30">30 ngày</option>
+                                <option value="90" selected>90 ngày</option>
+                                <option value="180">180 ngày</option>
+                            </select>
+                            <label for="codex-task-timeline-window">Cửa sổ</label>
+                            <select id="codex-task-timeline-window" aria-label="Cửa sổ median trượt theo task">
+                                <option value="7">7 ngày · nhạy</option>
+                                <option value="14" selected>14 ngày · cân bằng</option>
+                                <option value="30">30 ngày · ổn định</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="codex-task-timeline-status" class="quota-timeline-status"></div>
+                    <div id="codex-task-timeline-legend" class="quota-timeline-legend"></div>
+                    <div class="quota-timeline-canvas-wrap">
+                        <canvas id="canvas-codex-task-timeline"></canvas>
+                    </div>
+                    <div class="table-container quota-timeline-table-wrap">
+                        <table class="data-table" id="codex-quota-per-task-recent-table">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:180px;">Model + Effort</th>
+                                    <th class="num" style="min-width:145px;">Gần Nhất %5h / Task</th>
+                                    <th class="num" style="min-width:145px;" title="Lớn hơn 1× nghĩa là task gần đây tiêu hao quota nhiều hơn Sol High trong cùng cửa sổ.">Gần Nhất vs Sol High</th>
+                                    <th class="num" style="min-width:125px;">Cửa Sổ Trước</th>
+                                    <th class="num" style="min-width:115px;">Biến Động</th>
+                                    <th class="num" style="min-width:130px;">Tokens / Task</th>
+                                    <th class="num" style="min-width:125px;">Task Model / Sol</th>
+                                    <th style="min-width:155px;">Coverage / Tin Cậy</th>
+                                    <th style="min-width:155px;">Ghi Nhận Gần Nhất</th>
+                                </tr>
+                            </thead>
+                            <tbody id="codex-quota-per-task-recent-body">
+                                <tr><td colspan="9" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ ít nhất 5 task của model và Sol High trong cùng cửa sổ để so sánh.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card" style="padding: 1.25rem 1.5rem; border: 1px solid var(--border-color, rgba(255,255,255,0.08)); border-radius: 12px; background: var(--card-bg, rgba(255,255,255,0.02)); box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+                    <div style="margin-bottom:0.85rem;">
+                        <h3 style="font-size:1.1rem;font-weight:600;margin:0;">Hiệu Suất Hạn Mức Codex 5h</h3>
+                        <p id="codex-quota-efficiency-note" style="font-size:0.78rem;color:var(--text-muted,#94a3b8);margin:5px 0 0 0;">
+                            Đo thực nghiệm từ snapshot rate-limit trong log Codex cục bộ; không phải công thức trọng số chính thức của OpenAI.
+                        </p>
+                    </div>
+                    <div class="table-container" style="margin:0;">
+                        <table class="data-table" id="codex-quota-efficiency-table">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:180px;">Model + Effort</th>
+                                    <th class="num" style="min-width:145px;">Tokens / 1% 5h</th>
+                                    <th class="num" style="min-width:145px;">%5h / 1M Tokens</th>
+                                    <th class="num" style="min-width:120px;" title="Lớn hơn 1× nghĩa là tiêu hao hạn mức nhanh hơn Sol High trên cùng số raw token.">vs Sol High</th>
+                                    <th class="num" style="min-width:150px;">Quota Span / Phiên</th>
+                                    <th class="num" style="min-width:90px;">Mẫu</th>
+                                    <th style="min-width:100px;">Độ Tin Cậy</th>
+                                </tr>
+                            </thead>
+                            <tbody id="codex-quota-efficiency-body">
+                                <tr><td colspan="7" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu để ước tính hiệu suất hạn mức Codex 5h.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" style="padding-top: 0; padding-bottom: 1.5rem;">
+                <div class="card" style="padding: 1.25rem 1.5rem; border: 1px solid var(--border-color, rgba(255,255,255,0.08)); border-radius: 12px; background: var(--card-bg, rgba(255,255,255,0.02)); box-shadow: 0 4px 20px rgba(0,0,0,0.15);">
+                    <div style="margin-bottom:0.85rem;">
+                        <h3 style="font-size:1.1rem;font-weight:600;margin:0;">Tiêu Hao Hạn Mức Codex 5h Theo Task</h3>
+                        <p id="codex-quota-per-task-note" style="font-size:0.78rem;color:var(--text-muted,#94a3b8);margin:5px 0 0 0;">
+                            Đo theo task hoàn tất trong log Codex cục bộ; %5h/task được ngoại suy theo độ phủ token. Task đổi model hoặc đi qua mốc reset 5h được loại khỏi mẫu; đây không phải công thức chính thức của OpenAI.
+                        </p>
+                    </div>
+                    <div class="table-container" style="margin:0;">
+                        <table class="data-table" id="codex-quota-per-task-table">
+                            <thead>
+                                <tr>
+                                    <th style="min-width:180px;">Model + Effort</th>
+                                    <th class="num" style="min-width:135px;">Ước %5h / Task</th>
+                                    <th class="num" style="min-width:135px;">Quan Sát / Task</th>
+                                    <th class="num" style="min-width:135px;">Tokens / Task</th>
+                                    <th class="num" style="min-width:110px;">Coverage</th>
+                                    <th class="num" style="min-width:120px;" title="Lớn hơn 1× nghĩa là ước tính tiêu hao hạn mức nhiều hơn Sol High cho một task.">vs Sol High</th>
+                                    <th class="num" style="min-width:120px;">Task / Phiên</th>
+                                    <th style="min-width:100px;">Độ Tin Cậy</th>
+                                </tr>
+                            </thead>
+                            <tbody id="codex-quota-per-task-body">
+                                <tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ dữ liệu task hoàn tất để ước tính.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Models Breakdown Table -->
+            <section class="section" style="padding-top: 0;">
+                <div class="table-container">
+                    <table class="data-table models-breakdown-table" id="models-breakdown-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-sort="model_id" style="min-width:210px;">Model (Tên + Mức Suy Luận)</th>
+                                <th class="sortable" data-sort="platform" style="min-width:80px;">Nền Tảng</th>
+                                <th class="sortable" data-sort="source_label" style="min-width:130px;">Nguồn Dữ Liệu</th>
+                                <th class="num sortable" data-sort="today_tokens" style="min-width:150px;" title="Tokens và chi phí ước tính từ 00:00 hôm nay">Hôm Nay · Tokens + $</th>
+                                <th class="num sortable" data-sort="weekly_tokens" style="min-width:155px;" title="Tokens và chi phí ước tính trong 7 ngày gần nhất">7 Ngày · Tokens + $</th>
+                                <th class="num sortable" data-sort="total_tokens" style="min-width:155px;" title="Tokens và chi phí ước tính tích lũy toàn thời gian">All-Time · Tokens + $</th>
+                                <th class="num sortable" data-sort="input_tokens">Input</th>
+                                <th class="num sortable" data-sort="output_tokens">Output</th>
+                                <th class="num sortable" data-sort="thinking_tokens">Thinking</th>
+                                <th class="num" style="min-width:118px;" title="Trung bình tokens trên mỗi phản hồi, tách Input / Output / Thinking">TB / Phản Hồi</th>
+                                <th class="num sortable" data-sort="weekly_quota_pct_used" style="min-width:170px;" title="Tỉ lệ % hạn mức tuần đã tiêu thụ (Weekly Tokens ÷ Hạn Mức Tuần)">Quota Tuần (%)</th>
+                                <th class="num sortable" data-sort="sessions">Phiên</th>
+                                <th class="num sortable" data-sort="responses">Phản Hồi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="models-breakdown-tbody">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                        <tfoot id="models-breakdown-tfoot">
+                            <!-- Populated dynamically -->
+                        </tfoot>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- ==================== TAB 5: COST TO ACCEPTANCE ==================== -->
+        <div id="tab-task-outcomes" class="tab-pane">
+            <section class="leaderboard-hero task-outcome-hero">
+                <div class="hero-tag"><span>🎯 GOAL-TO-ACCEPTANCE</span></div>
+                <h2>Hiệu Quả Model Theo Loại Công Việc</h2>
+                <p>
+                    Ghép mọi lượt sửa, giảng lại và tiếp tục cho đến khi một mục tiêu được chấp nhận.
+                    Ma trận chỉ dùng nhiệm vụ một model và đủ mẫu; tuyến đổi model hoặc có subagent được giữ riêng để tránh quy công sai.
+                </p>
+            </section>
+
+            <section class="summary-section">
+                <div class="summary-grid task-outcome-summary-grid" id="task-outcome-summary-grid">
+                    <div class="summary-card"><div class="summary-card-label">Đang lập chỉ mục</div><div class="summary-card-value">—</div></div>
+                </div>
+            </section>
+
+            <section class="section task-outcome-section">
+                <div class="section-header task-outcome-header">
+                    <div>
+                        <h2 class="section-title">Ma Trận Tổng Token Đến Khi Đạt Yêu Cầu</h2>
+                        <p class="section-desc" id="task-outcome-matrix-note">Sol High là 1.00× trong cùng loại công việc. Ô thiếu mẫu không được nội suy.</p>
+                    </div>
+                    <div class="task-outcome-controls">
+                        <label for="task-outcome-range">Khoảng đo</label>
+                        <select id="task-outcome-range" class="filter-select">
+                            <option value="90">90 ngày gần nhất</option>
+                            <option value="180" selected>180 ngày gần nhất</option>
+                            <option value="365">365 ngày gần nhất</option>
+                            <option value="all">Toàn bộ dữ liệu</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-container task-outcome-matrix-wrap">
+                    <table class="data-table task-outcome-matrix" id="task-outcome-matrix-table">
+                        <thead id="task-outcome-matrix-head"><tr><th>Loại công việc</th><th>Đang tải…</th></tr></thead>
+                        <tbody id="task-outcome-matrix-body"><tr><td colspan="2">Đang xây dựng ma trận…</td></tr></tbody>
+                    </table>
+                </div>
+                <div class="task-outcome-legend">
+                    <span><i class="task-cell-dot ready"></i> Đủ mẫu</span>
+                    <span><i class="task-cell-dot sparse"></i> Chưa đủ mẫu</span>
+                    <span><i class="task-cell-dot missing"></i> Chưa có dữ liệu</span>
+                    <span>Hệ số &lt;1× dùng ít token hơn Sol High; &gt;1× dùng nhiều hơn.</span>
+                </div>
+            </section>
+
+            <section class="section task-outcome-section">
+                <div class="section-header task-outcome-header">
+                    <div>
+                        <h2 class="section-title">Kiểm Tra Các Nhiệm Vụ Đã Ghép</h2>
+                        <p class="section-desc" id="task-outcome-audit-note">Tự động phân nhóm chỉ là gợi ý. Hãy sửa loại việc, kết quả hoặc ranh giới trước khi tin một ô ít mẫu.</p>
+                    </div>
+                    <span class="chart-badge" id="task-outcome-visible-count">0 nhiệm vụ</span>
+                </div>
+                <div class="task-outcome-audit-controls">
+                    <input id="task-outcome-search" class="search-input task-outcome-search" type="search" placeholder="Tìm nội dung nhiệm vụ hoặc model…">
+                    <select id="task-outcome-category-filter" class="filter-select"><option value="all">Tất cả loại công việc</option></select>
+                    <select id="task-outcome-status-filter" class="filter-select">
+                        <option value="all">Tất cả kết quả</option>
+                        <option value="accepted">Đã đạt yêu cầu</option>
+                        <option value="unresolved">Chưa xác nhận</option>
+                        <option value="abandoned">Đã bỏ dở</option>
+                    </select>
+                    <select id="task-outcome-route-filter" class="filter-select">
+                        <option value="all">Mọi tuyến model</option>
+                        <option value="pure">Một model</option>
+                        <option value="mixed">Đổi model / subagent</option>
+                    </select>
+                </div>
+                <div class="table-container task-outcome-audit-wrap">
+                    <table class="data-table task-outcome-audit-table" id="task-outcome-audit-table">
+                        <thead>
+                            <tr>
+                                <th style="min-width:280px;">Nhiệm vụ đã ghép</th>
+                                <th style="min-width:170px;">Loại công việc</th>
+                                <th style="min-width:150px;">Kết quả</th>
+                                <th style="min-width:190px;">Tuyến model</th>
+                                <th class="num" style="min-width:90px;">Lượt / Sửa</th>
+                                <th class="num" style="min-width:130px;">Tổng token</th>
+                                <th class="num" style="min-width:120px;">Công dạy thêm</th>
+                                <th style="min-width:130px;">Bắt đầu</th>
+                                <th style="min-width:100px;">Tin cậy</th>
+                                <th style="min-width:190px;">Ranh giới</th>
+                            </tr>
+                        </thead>
+                        <tbody id="task-outcome-audit-body">
+                            <tr><td colspan="10" style="text-align:center;padding:1.2rem;">Đang đọc lịch sử Codex…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- Deep Step Inspector Modal -->
+        <div class="modal-overlay" id="modal-overlay">
+            <div class="modal" id="detail-modal">
+                <button class="modal-close" onclick="closeModal()" title="Đóng modal">×</button>
+                <div id="modal-content">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Quota Calibration / Real % Input Modal -->
+        <div class="modal-overlay" id="modal-calibrate">
+            <div class="modal modal-calibrate-dialog">
+                <button class="modal-close" onclick="closeCalibrateModal()" title="Đóng modal">×</button>
+                <div class="modal-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.5rem;">⚙️</span>
+                        <div>
+                            <h2 style="font-size:1.25rem;font-weight:700;color:var(--text-primary);">Hiệu Chỉnh Hạn Mức Quota (IDE Settings)</h2>
+                            <p style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">Nhập % còn lại trong IDE Settings để bộ ước lượng tự học và chính xác dần qua nhiều lần đo.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-body" style="padding: 20px 0;">
+                    <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.84rem; line-height: 1.5; color: var(--text-main);">
+                        💡 <strong>Nguyên lý tự hiệu chuẩn:</strong> mỗi lần bạn nhập <strong>% Còn Lại</strong>, hệ thống lưu nó cùng snapshot <strong>token rolling đang theo dõi</strong> thành một điểm đo. Nhiều điểm đo sẽ được đối chiếu bằng estimator chống nhiễu/làm tròn để suy ra dung lượng quota. Một lần nhập đơn lẻ chỉ là mốc neo, không ép tính lại tổng quota.
+                    </div>
+                    <div class="calibrate-grid">
+                        <div class="cal-item">
+                            <label class="cal-label">
+                                <span class="brand-badge brand-google">GOOGLE</span>
+                                <strong>Gemini (5 Giờ) Còn Lại:</strong>
+                            </label>
+                            <div class="cal-input-wrap">
+                                <input type="number" id="input-cal-gem-5h" class="input-styled" min="0" max="100" step="0.1" value="100">
+                                <span class="cal-unit">%</span>
+                            </div>
+                            <div style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+                                <input type="checkbox" id="chk-gem-5h-reset-cycle" style="accent-color:var(--cyan-400); cursor:pointer;">
+                                <label for="chk-gem-5h-reset-cycle" style="font-size:0.75rem; color:var(--cyan-400); cursor:pointer;">🔄 Vừa reset chu kỳ (Xóa token dồn trước lúc reset)</label>
+                            </div>
+                            <div class="cal-preview-box" id="preview-gem-5h" style="font-size:0.75rem; color:var(--text-muted); margin-top:8px; background:rgba(0,0,0,0.25); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+
+                        <div class="cal-item">
+                            <label class="cal-label">
+                                <span class="brand-badge brand-anthropic">EXTERNAL</span>
+                                <strong>Claude / GPT (5 Giờ) Còn Lại:</strong>
+                            </label>
+                            <div class="cal-input-wrap">
+                                <input type="number" id="input-cal-ext-5h" class="input-styled" min="0" max="100" step="0.1" value="100">
+                                <span class="cal-unit">%</span>
+                            </div>
+                            <div style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+                                <input type="checkbox" id="chk-ext-5h-reset-cycle" style="accent-color:var(--purple-400); cursor:pointer;">
+                                <label for="chk-ext-5h-reset-cycle" style="font-size:0.75rem; color:var(--purple-400); cursor:pointer;">🔄 Vừa reset chu kỳ (Xóa token dồn trước lúc reset)</label>
+                            </div>
+                            <div class="cal-preview-box" id="preview-ext-5h" style="font-size:0.75rem; color:var(--text-muted); margin-top:8px; background:rgba(0,0,0,0.25); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+
+                        <div class="cal-item">
+                            <label class="cal-label">
+                                <span class="brand-badge brand-google">GOOGLE</span>
+                                <strong>Gemini (Theo Tuần) Còn Lại:</strong>
+                            </label>
+                            <div class="cal-input-wrap">
+                                <input type="number" id="input-cal-gem-wk" class="input-styled" min="0" max="100" step="0.1" value="100">
+                                <span class="cal-unit">%</span>
+                            </div>
+                            <div style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+                                <input type="checkbox" id="chk-gem-wk-reset-cycle" style="accent-color:var(--cyan-400); cursor:pointer;">
+                                <label for="chk-gem-wk-reset-cycle" style="font-size:0.75rem; color:var(--cyan-400); cursor:pointer;">🔄 Vừa reset chu kỳ tuần</label>
+                            </div>
+                            <div class="cal-preview-box" id="preview-gem-wk" style="font-size:0.75rem; color:var(--text-muted); margin-top:8px; background:rgba(0,0,0,0.25); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+
+                        <div class="cal-item">
+                            <label class="cal-label">
+                                <span class="brand-badge brand-anthropic">EXTERNAL</span>
+                                <strong>Claude / GPT (Theo Tuần) Còn Lại:</strong>
+                            </label>
+                            <div class="cal-input-wrap">
+                                <input type="number" id="input-cal-ext-wk" class="input-styled" min="0" max="100" step="0.1" value="100">
+                                <span class="cal-unit">%</span>
+                            </div>
+                            <div style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+                                <input type="checkbox" id="chk-ext-wk-reset-cycle" style="accent-color:var(--purple-400); cursor:pointer;">
+                                <label for="chk-ext-wk-reset-cycle" style="font-size:0.75rem; color:var(--purple-400); cursor:pointer;">🔄 Vừa reset chu kỳ tuần</label>
+                            </div>
+                            <div class="cal-preview-box" id="preview-ext-wk" style="font-size:0.75rem; color:var(--text-muted); margin-top:8px; background:rgba(0,0,0,0.25); padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06);">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+
+                        <!-- Optional Reset Time Calibration -->
+                        <div class="cal-item" style="grid-column: span 2; background: rgba(255,255,255,0.02); padding: 14px; border-radius: 8px; border: 1px dashed rgba(255,255,255,0.15);">
+                            <div style="font-size:0.85rem; font-weight:700; color:var(--cyan-400); margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+                                <span>⏱️ Đồng Bộ Thời Gian Đếm Ngược Reset (Theo IDE Settings):</span>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:12px;">
+                                <div>
+                                    <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:4px;">Gemini 5h còn (Số phút):</label>
+                                    <input type="number" id="input-cal-gem-reset-min" class="input-styled" style="width:100%;" placeholder="ví dụ: 270 (để trống để tự tính)">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:4px;">Model Ngoài 5h còn (Số phút):</label>
+                                    <input type="number" id="input-cal-ext-reset-min" class="input-styled" style="width:100%;" placeholder="0 = Đã đầy 100%">
+                                </div>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                                <div>
+                                    <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:4px;">Gemini Tuần còn (Số giờ):</label>
+                                    <input type="number" id="input-cal-gem-wk-reset-hours" class="input-styled" style="width:100%;" placeholder="ví dụ: 168 (7 ngày = 168h)">
+                                </div>
+                                <div>
+                                    <label style="font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:4px;">Model Ngoài Tuần còn (Số giờ):</label>
+                                    <input type="number" id="input-cal-ext-wk-reset-hours" class="input-styled" style="width:100%;" placeholder="ví dụ: 140 (để trống để tự tính)">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+                    <button class="btn-secondary" onclick="closeCalibrateModal()">Hủy Bỏ</button>
+                    <button class="btn-primary" id="btn-save-calibrate">
+                        <span>Lưu & Đồng Bộ Ngay</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add New Gmail Account Modal -->
+        <div class="modal-overlay" id="modal-add-account">
+            <div class="modal modal-calibrate-dialog">
+                <button class="modal-close" onclick="closeAddAccountModal()" title="Đóng modal">×</button>
+                <div class="modal-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.5rem;">👤</span>
+                        <div>
+                            <h2 style="font-size:1.25rem;font-weight:700;color:var(--text-primary);">Thêm Tài Khoản Gmail Đăng Nhập</h2>
+                            <p style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">Lưu giữ danh bạ tài khoản để dễ dàng theo dõi và chuyển đổi xem hạn mức.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-body" style="padding: 20px 0; display:flex; flex-direction:column; gap:14px;">
+                    <div>
+                        <label class="control-label" style="display:block;margin-bottom:6px;">Địa chỉ Gmail (*):</label>
+                        <input type="email" id="input-new-email" class="input-styled" style="width:100%;font-size:0.95rem;" placeholder="ví dụ: user2@gmail.com" required>
+                    </div>
+
+                    <div>
+                        <label class="control-label" style="display:block;margin-bottom:6px;">Họ và Tên:</label>
+                        <input type="text" id="input-new-name" class="input-styled" style="width:100%;font-size:0.95rem;" placeholder="ví dụ: Nguyễn Văn A">
+                    </div>
+
+                    <div>
+                        <label class="control-label" style="display:block;margin-bottom:6px;">Gói dịch vụ:</label>
+                        <select id="select-new-tier" class="select-styled" style="width:100%;">
+                            <option value="Google AI Pro" selected>Google AI Pro (Mặc định)</option>
+                            <option value="Google AI Ultra">Google AI Ultra (Hạn mức cao)</option>
+                            <option value="Standard / Free Trial">Standard / Free Trial</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:12px;margin-top:10px;">
+                    <button class="btn-secondary" onclick="closeAddAccountModal()">Hủy Bỏ</button>
+                    <button class="btn-primary" id="btn-save-new-account">
+                        <span>+ Thêm & Lưu Tài Khoản</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Codex Model Input Modal -->
+        <div class="modal-overlay" id="modal-codex">
+            <div class="modal modal-calibrate-dialog">
+                <button class="modal-close" onclick="closeCodexModal()" title="Đóng modal">×</button>
+                <div class="modal-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.5rem;">🔧</span>
+                        <div>
+                            <h2 style="font-size:1.25rem;font-weight:700;color:var(--text-primary);">Thêm / Cập Nhật Model Codex</h2>
+                            <p style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">Nhập dữ liệu usage từ Codex (OpenAI, Anthropic) để theo dõi tổng hợp.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-body" style="padding: 20px 0; display:flex; flex-direction:column; gap:14px;">
+                    <div>
+                        <label class="control-label" style="display:block;margin-bottom:6px;">Tên Model (*):</label>
+                        <input type="text" id="input-codex-model-name" class="input-styled" style="width:100%;font-size:0.95rem;" placeholder="ví dụ: 5.6 sol xhigh, 5.6 terra high, 5.6 luna standard" list="codex-model-suggestions">
+                        <datalist id="codex-model-suggestions">
+                            <option value="5.6 sol max">
+                            <option value="5.6 sol xhigh">
+                            <option value="5.6 sol high">
+                            <option value="5.6 sol standard">
+                            <option value="5.6 sol low">
+                            <option value="5.6 sol none">
+                            <option value="5.6 terra max">
+                            <option value="5.6 terra xhigh">
+                            <option value="5.6 terra high">
+                            <option value="5.6 terra standard">
+                            <option value="5.6 terra low">
+                            <option value="5.6 terra none">
+                            <option value="5.6 luna max">
+                            <option value="5.6 luna xhigh">
+                            <option value="5.6 luna high">
+                            <option value="5.6 luna standard">
+                            <option value="5.6 luna low">
+                            <option value="5.6 luna none">
+                            <option value="o3 xhigh">
+                            <option value="o3 high">
+                            <option value="o4-mini high">
+                            <option value="o4-mini xhigh">
+                            <option value="gpt-4.1 standard">
+                            <option value="claude 4 sonnet standard">
+                        </datalist>
+                    </div>
+
+                    <div>
+                        <label class="control-label" style="display:block;margin-bottom:6px;">Chế Độ Cập Nhật:</label>
+                        <div style="display:flex;gap:16px;background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;cursor:pointer;color:var(--text-main);">
+                                <input type="radio" name="codex-mode" value="add" checked>
+                                <span>➕ <strong>Cộng dồn</strong> vào số liệu cũ (Phiên mới)</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;cursor:pointer;color:var(--text-muted);">
+                                <input type="radio" name="codex-mode" value="overwrite">
+                                <span>🔄 <strong>Ghi đè</strong> toàn bộ</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Tokens All-Time / Thêm:</label>
+                            <input type="number" id="input-codex-total-tokens" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Tokens 7 Ngày Qua:</label>
+                            <input type="number" id="input-codex-weekly-tokens" class="input-styled" style="width:100%;" placeholder="để trống = All-Time/Thêm" min="0">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Chi Phí All-Time / Thêm ($):</label>
+                            <input type="number" id="input-codex-cost" class="input-styled" style="width:100%;" placeholder="0.00" step="0.01" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Chi Phí 7 Ngày Qua ($):</label>
+                            <input type="number" id="input-codex-weekly-cost" class="input-styled" style="width:100%;" placeholder="để trống nếu chưa biết" step="0.01" min="0">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Input Tokens:</label>
+                            <input type="number" id="input-codex-input-tokens" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Output Tokens:</label>
+                            <input type="number" id="input-codex-output-tokens" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Thinking Tokens:</label>
+                            <input type="number" id="input-codex-thinking-tokens" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Số Phiên:</label>
+                            <input type="number" id="input-codex-sessions" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Số Phản Hồi:</label>
+                            <input type="number" id="input-codex-responses" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                        <div>
+                            <label class="control-label" style="display:block;margin-bottom:6px;">Tool Calls:</label>
+                            <input type="number" id="input-codex-tool-calls" class="input-styled" style="width:100%;" placeholder="0" min="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:12px;margin-top:10px;">
+                    <button class="btn-secondary" onclick="closeCodexModal()">Hủy Bỏ</button>
+                    <button class="btn-primary" id="btn-save-codex-model" onclick="submitCodexModel()">
+                        <span>💾 Lưu Model</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Codex Weekly Limit Modal -->
+        <div class="modal-overlay" id="modal-codex-limit">
+            <div class="modal" style="max-width:420px;">
+                <button class="modal-close" onclick="closeCodexLimitModal()" title="Đóng modal">×</button>
+                <div class="modal-header">
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:1.5rem;">⏱️</span>
+                        <div>
+                            <h2 style="font-size:1.25rem;font-weight:700;color:var(--text-primary);">Hạn Mức Tuần Codex</h2>
+                            <p style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">Nhập tổng token được cấp mỗi tuần cho gói Codex.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-body" style="padding:20px 0;">
+                    <label class="control-label" style="display:block;margin-bottom:6px;">Hạn mức tuần (tokens):</label>
+                    <input type="number" id="input-codex-weekly-limit" class="input-styled" style="width:100%;font-size:1rem;" placeholder="ví dụ: 5000000" min="0">
+                </div>
+                <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:12px;margin-top:10px;">
+                    <button class="btn-secondary" onclick="closeCodexLimitModal()">Hủy Bỏ</button>
+                    <button class="btn-primary" onclick="submitCodexWeeklyLimit()">
+                        <span>💾 Lưu Hạn Mức</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <p><strong>AGY Live Usage Tracker</strong> • Giám sát mức tiêu tốn tài nguyên cho Google Antigravity IDE</p>
+                <p class="footer-note">Hệ số quy đổi ước lượng: ~3 ký tự/token cho nội dung song ngữ Việt/Anh + mã nguồn</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Fallback data for offline/file-protocol mode -->
+    <script src="data.js"></script>
+    <script src="app.js?v=20260912-fixed-timeline-axis-1"></script>
+</body>
+</html>

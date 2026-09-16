@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+# Local runtime state and generated dashboard data
+accounts.json
+codex_usage.json
+codex_models_cache.json
+codex_mission_turns_cache.json
+codex_mission_reviews.json
+quota_observations.json
+real_quotas.json
+time_series_history.json
+data.js
+runtime/
+runtime_backups/
+
+# Local QA and migration artifacts
+.codex_*
+_qa_*
+_run_505*.py
+*.before-worker-calibration-*.json
