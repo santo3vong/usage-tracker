@@ -8,7 +8,7 @@ Usage Tracker sinh ra từ một câu hỏi khá đời thường: **mình đang
 
 Nó không chỉ cộng token. Tracker cố nối từ usage hiện tại, quota 5 giờ/tuần, cost, model route, đến cả việc task đã thực sự xong hay vẫn phải sửa và giảng lại nhiều lượt.
 
-> Các snapshot trong README dùng **demo data**, không phải telemetry thật của tác giả.
+> Các snapshot dưới đây là ảnh chụp trực tiếp từ Usage Tracker sau khi chạy thực tế. Một số ảnh cũ dạng demo vẫn được giữ cho các ví dụ minh họa UI đơn giản.
 
 ## Vì sao tôi làm Usage Tracker
 
@@ -28,7 +28,7 @@ Vì vậy Usage Tracker dần được xây thành một nơi để trả lời 
 - Nếu có orchestrator, executor hoặc subagent thì cost/usage phải ghi cho route nào?
 - Nếu chưa biết cost hay usage thì có thể để là `unknown`, thay vì vô tình biến thành `0` không?
 
-![Quota overview using synthetic demo data](docs/screenshots/quota-overview.svg)
+![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
 
 ## Vì sao phải nhìn cả usage tức thời lẫn usage trung bình
 
@@ -49,7 +49,7 @@ Vì thế hai con số phải đi cùng nhau:
 
 Một cái cho bạn cảnh báo sớm, một cái cho bạn baseline để so sánh.
 
-![Current and typical usage demo](docs/screenshots/model-usage-cost.svg)
+![Model breakdown and real usage cost view](docs/screenshots/model-breakdown-real.png)
 
 ## Vì sao “Sol orchestrator + Luna executor” không có một tỷ lệ tiết kiệm cố định
 
@@ -63,7 +63,7 @@ Vì vậy tôi không muốn Usage Tracker mặc định một công thức ki�
 
 Tracker được dùng để đo chính những task của bạn, gom chúng theo loại công việc và route, rồi cho bạn thấy model/workflow nào thực tế đang tiêu tốn bao nhiêu hạn mức. Từ đó bạn chọn model dựa trên dữ liệu của mình, thay vì dựa trên một hệ số chung của người khác.
 
-![5h quota efficiency demo](docs/screenshots/quota-efficiency.svg)
+![Quota efficiency comparison from real Usage Tracker capture](docs/screenshots/quota-efficiency-real.png)
 
 ## Có những cách cộng tưởng đúng nhưng lại sai
 
@@ -88,7 +88,7 @@ Quy tắc hiện tại là:
 
 Vì vậy phần kỹ thuật trong tracker chủ yếu được sinh ra để tránh các lỗi kiểu này, chứ không phải để làm dashboard phức tạp hơn cho đẹp.
 
-![Usage investigation demo](docs/screenshots/usage-investigation.svg)
+![Usage investigation and cost trend view](docs/screenshots/cost-trend-real.png)
 
 ## Từ một turn sang một mission hoàn chỉnh
 

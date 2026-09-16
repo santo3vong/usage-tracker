@@ -8,7 +8,7 @@ Usage Tracker grew out of a practical question: **which model is actually effici
 
 It is not just a token counter. The tracker connects current usage, 5-hour/weekly quota, cost, model routes, and whether a task was actually finished or required several repair and re-teaching turns.
 
-> Screenshots in this README use **synthetic demo data**, not the author's real telemetry.
+> The screenshots below include direct captures from Usage Tracker running with real data. Older synthetic demo images may still be used where they are only meant to explain a UI concept.
 
 ## Why I built Usage Tracker
 
@@ -28,7 +28,7 @@ Usage Tracker therefore grew around more practical questions:
 - If an orchestrator, executor, or subagent was involved, which route should receive the usage and cost?
 - If cost or usage is unknown, can it remain `unknown` instead of silently becoming zero?
 
-![Quota overview using synthetic demo data](docs/screenshots/quota-overview.svg)
+![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
 
 ## Why both instantaneous and typical usage matter
 
@@ -49,7 +49,7 @@ That is why the two views belong together:
 
 One is an early warning; the other is context.
 
-![Current and typical usage demo](docs/screenshots/model-usage-cost.svg)
+![Model breakdown and real usage cost view](docs/screenshots/model-breakdown-real.png)
 
 ## Why “Sol orchestrator + Luna executor” has no universal saving ratio
 
@@ -63,7 +63,7 @@ So Usage Tracker does not assume a formula such as “Luna always saves X%.” *
 
 The tracker measures your own completed tasks, groups them by task type and route, and shows how much quota those workflows actually consumed. That gives you a way to choose models using your own evidence rather than someone else's universal coefficient.
 
-![5h quota efficiency demo](docs/screenshots/quota-efficiency.svg)
+![Quota efficiency comparison from real Usage Tracker capture](docs/screenshots/quota-efficiency-real.png)
 
 ## Some obvious-looking accounting methods are wrong
 
@@ -88,7 +88,7 @@ That is only one failure mode. Other ways to make a benchmark look better than r
 
 Most of the technical machinery in this project exists to prevent those practical measurement mistakes, not to make the dashboard look complicated.
 
-![Usage investigation demo](docs/screenshots/usage-investigation.svg)
+![Usage investigation and cost trend view](docs/screenshots/cost-trend-real.png)
 
 ## From individual turns to complete missions
 
