@@ -4,123 +4,136 @@
 
 **Tiếng Việt** · [English](README.en.md)
 
-Usage Tracker sinh ra từ một câu hỏi khá đời thường: **mình đang dùng model nào hiệu quả, và một công việc như thế này thực sự ăn bao nhiêu hạn mức?**
-
-Nó không chỉ cộng token. Tracker cố nối từ usage hiện tại, quota 5 giờ/tuần, cost, model route, đến cả việc task đã thực sự xong hay vẫn phải sửa và giảng lại nhiều lượt.
+Trình duyệt này dùng để theo dõi những thông số thiết thực cho việc quản lí hạn mức AI của bạn
 
 > Các snapshot dưới đây là ảnh chụp trực tiếp từ Usage Tracker sau khi chạy thực tế. Một số ảnh cũ dạng demo vẫn được giữ cho các ví dụ minh họa UI đơn giản.
 
-## Vì sao tôi làm Usage Tracker
+##  Usage Tracker này có gì đặc biệt hơn
 
-Ban đầu tôi chỉ muốn biết Codex còn bao nhiêu hạn mức. Sau đó tôi nhận ra chỉ nhìn một con số quota hoặc một tổng token vẫn chưa trả lời được câu hỏi mình thực sự cần.
+Nếu các bạn chịu khó lên x.com để hóng tin AI thì hẳn bạn cũng đã đụng một số người có ý tưởng dùng sol làm orchestrator và luna làm executor để tiết kiệm token, tuy nhiên hiệu quả tiết kiệm còn khá trồi sụt và chưa thật sự hiệu quả ở phần lớn user, vì có lẽ là do đặc thù công việc ở mỗi người làm, ở những người mà có công việc sáng tạo hoặc phải brainstorm nhiều thì workload ấy có khi còn tốn token hơn, vậy nên do tùy đặc thù công việc mỗi người, thì tốn hay ko thì sẽ khác nhau, vì vậy repo này sinh ra như một công cụ giúp bạn ước lượng được model này sẽ tiêu tốn bao nhiêu hạn mức cho công việc đấy, từ đó sẽ giúp các bạn chọn model một cách hợp lí hơn.
+Một trường hợp khác là trước đây Tibo là trưởng bộ phận codex cũng nói rằng là astra sẽ đỡ tốn hơn so với sol , nhưng cuối cùng có đo thì mới biết được là  nó còn phải tùy thuộc theo đặc thù công việc đã, ví dụ như của tôi, 5.6 sol extra high là tốn hơn 1.5 lần so với sol high, vẫn tiết kiệm hơn với các mô hình astra là phải gấp 3 lần hạn mức so với sol high, từ đó tôi thấy được là với công việc của tôi, nếu độ thông mình của sol extra high là đã đủ cho xử lí công việc, và khối lượng công việc còn nhiều, thì cứ theo 5.6 sol extra high mà giã. đồng thời cũng kiểm chứng được thông tin mà giới lập trình khi test astra trong giai đoạn đầu báo rằng là astra extra high/ max đỡ tốn hơn so với astra low/medium, thực tế công việc của tôi thì đúng là astra extra high là tiết kiệm nhất trong các mô hình, low và medium lại tốn hơn nhiều
 
-Ví dụ, có lúc một model nhìn rất “rẻ” ở lượt đầu. Nhưng kết quả chưa dùng được, mình phải sửa yêu cầu, giải thích lại, bảo nó làm tiếp, hoặc đổi model khác vào cứu. Nếu chỉ tính lượt đầu thì model đó trông rất tiết kiệm; nếu tính cho đến lúc công việc thực sự được chấp nhận thì câu chuyện có thể khác hẳn.
+Từ những nhu cầu đo đạc đó, Usage Tracker tập trung giải quyết các câu hỏi cụ thể:
 
-Tôi cũng gặp trường hợp ngược lại: một model đốt quota khá nhanh ngay lúc này, nhưng với đúng loại công việc đó thì nó thường hoàn thành nhanh và ít phải sửa. Chỉ nhìn usage tức thời cũng dễ kết luận sai.
+Codex còn bao nhiêu quota trong khung 5 giờ và khung tuần?
 
-Vì vậy Usage Tracker dần được xây thành một nơi để trả lời các câu hỏi thực tế hơn:
+Con số hiển thị lấy trực tiếp từ log hay đang là mức ước tính (estimate)?
 
-- Codex còn bao nhiêu quota trong khung 5 giờ và khung tuần?
-- Con số đang thấy là live, lấy từ log, hay chỉ là estimate?
-- Model này đang đốt quota nhanh thế nào **ngay lúc này**?
-- Với những task tương tự, nó **thường** tốn bao nhiêu?
-- Task đó đã thực sự xong chưa, hay còn phải sửa/re-teach nhiều lượt?
-- Nếu có orchestrator, executor hoặc subagent thì cost/usage phải ghi cho route nào?
-- Nếu chưa biết cost hay usage thì có thể để là `unknown`, thay vì vô tình biến thành `0` không?
+Mô hình đang tiêu hao hạn mức ở tốc độ nào tại thời điểm hiện tại?
+
+Với những task tương đương, mức sử dụng thông thường rơi vào khoảng bao nhiêu?
+
+Task đã hoàn tất hay cần thêm các lượt re-teach và chỉnh sửa?
+
+Khi phân luồng qua orchestrator, executor hay subagent, mức tiêu hao được ghi nhận cho nhánh nào?
+
+Các chỉ số chưa có dữ liệu sẽ hiển thị unknown, tránh việc gán mặc định bằng 0 gây sai lệch thống kê.
 
 ![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
 
-## Vì sao phải nhìn cả usage tức thời lẫn usage trung bình
+## Tính năng: usage tức thời/ usage trung 
 
-Đây là một trong những lý do quan trọng nhất khiến tôi không muốn tracker chỉ có một cột “đã dùng bao nhiêu token”.
+Tracker không chỉ hiển thị một cột tổng token đã dùng, vì một con số đơn lẻ khó phản ánh đúng tình trạng vận hành:
 
-**Usage tức thời** trả lời câu hỏi: _ngay lúc này model hoặc task này đang đốt hạn mức nhanh đến mức nào?_ Nó rất hữu ích khi bạn đang chạy một task dài và muốn biết có nên tiếp tục route hiện tại hay không.
+Usage tức thời (current / instantaneous): Cho biết tốc độ sử dụng hạn mức của mô hình hoặc tác vụ ngay lúc đang chạy. Chỉ số này giúp theo dõi và cân nhắc xem có nên duy trì luồng xử lý hiện tại hay không. Tuy nhiên, giá trị tức thời thường dễ biến động khi gặp các task có context lớn đột biến hoặc yêu cầu suy luận dài.
 
-Nhưng số tức thời dễ nhiễu. Một task khó bất thường, một lần phải đọc context lớn, hoặc một đoạn brainstorm dài có thể làm con số tăng mạnh dù đó không phải hành vi điển hình.
+Usage trung bình (average / typical): Đóng vai trò làm mốc tham chiếu cho các loại công việc tương đương. Để hạn chế ảnh hưởng từ các trường hợp bất thường (outliers), tracker ưu tiên sử dụng trung vị (median) khi đã thu thập đủ số lượng mẫu.
 
-**Usage trung bình/điển hình** trả lời câu hỏi khác: _với loại việc tương tự, model này thường tốn khoảng bao nhiêu?_ Ở những chỗ cần chống outlier, tracker ưu tiên median và yêu cầu đủ mẫu thay vì lấy một điểm đo duy nhất làm kết luận.
-
-Nhưng chỉ nhìn trung bình cũng chưa đủ. Trung bình đẹp có thể che mất một task hiện tại đang tốn bất thường.
-
-Vì thế hai con số phải đi cùng nhau:
-
-- **current / instantaneous** để biết tình hình của task đang chạy;
-- **average / typical** để biết điều gì thường xảy ra với loại workload đó.
-
-Một cái cho bạn cảnh báo sớm, một cái cho bạn baseline để so sánh.
+Việc kết hợp cả hai chỉ số giúp bạn vừa có cảnh báo sớm khi một task phát sinh chi phí bất thường, vừa có mốc nền tảng (baseline) để so sánh và lựa chọn mô hình phù hợp.
 
 ![Model breakdown and real usage cost view](docs/screenshots/model-breakdown-real.png)
 
 ## Vì sao “Sol orchestrator + Luna executor” không có một tỷ lệ tiết kiệm cố định
 
-Trước đây có một ý tưởng khá hợp lý: dùng Sol làm orchestrator để suy nghĩ và chia việc, còn Luna làm executor để xử lý phần implementation rẻ hơn. Trên giấy thì cách này có vẻ sẽ luôn tiết kiệm token/quota.
+Ý tưởng kết hợp Sol làm orchestrator để lập kế hoạch/chia việc và Luna làm executor thực thi thường được nhắc tới nhằm giảm bớt tiêu hao hạn mức. Tuy nhiên, mức độ hiệu quả thực tế phụ thuộc vào đặc thù từng tác vụ chứ khó có một tỷ lệ cố định:
 
-Nhưng khi dùng thực tế, hiệu quả tiết kiệm khá trồi sụt giữa từng người và từng loại công việc.
+Với các task phạm vi hẹp, logic rõ ràng: Ít phát sinh thêm lượt chỉnh sửa thì executor nhẹ hơn thường giúp giảm bớt lượng quota sử dụng.
 
-Với task lặp lại, phạm vi rõ, ít phải suy nghĩ lại, executor rẻ hơn có thể thực sự tiết kiệm. Nhưng với công việc sáng tạo, brainstorm, research, debug khó hoặc yêu cầu thay đổi liên tục, route orchestrator/executor có thể phải truyền lại context, giải thích lại mục tiêu, sửa phần executor làm chưa đúng rồi phối hợp thêm nhiều lượt. Lúc đó tổng usage có thể ngang hoặc thậm chí cao hơn việc dùng một model mạnh làm xuyên suốt.
+Với các task phức tạp, debug sâu hoặc cần tinh chỉnh nhiều: Việc luân chuyển context giữa các tầng, hướng dẫn lại và sửa các phần executor làm lệch có thể làm tăng số lượt tương tác. Khi đó, tổng hạn mức tiêu hao có thể tương đương, hoặc thậm chí cao hơn việc để một mô hình mạnh xử lý xuyên suốt.
 
-Vì vậy tôi không muốn Usage Tracker mặc định một công thức kiểu “Luna tiết kiệm X%”. **Workload của mỗi người khác nhau, nên mức tiết kiệm cũng khác nhau.**
-
-Tracker được dùng để đo chính những task của bạn, gom chúng theo loại công việc và route, rồi cho bạn thấy model/workflow nào thực tế đang tiêu tốn bao nhiêu hạn mức. Từ đó bạn chọn model dựa trên dữ liệu của mình, thay vì dựa trên một hệ số chung của người khác.
+Vì vậy, Usage Tracker không đặt sẵn công thức kiểu mặc định tiết kiệm được một lượng phần trăm nhất định. Mục đích của tracker là đo đạc trên chính luồng việc thực tế của bạn, ghi nhận mức tiêu hao theo từng route để bạn tự đối chiếu và quyết định cách phân bổ mô hình phù hợp.
 
 ![Quota efficiency comparison from real Usage Tracker capture](docs/screenshots/quota-efficiency-real.png)
 
 ## Có những cách cộng tưởng đúng nhưng lại sai
 
-Đây là phần tôi thấy rất dễ nhầm nếu chỉ nhìn log rồi cộng số.
+Nếu chỉ lấy các giá trị trong log cộng dồn lại, số liệu thống kê rất dễ bị sai lệch:
 
-Ví dụ đơn giản: nếu đồng hồ quãng đường trên xe lần lượt hiện 100 km, 130 km và 150 km, bạn không thể cộng `100 + 130 + 150` rồi nói xe đã chạy 380 km. Đó là số cộng dồn; phần tăng thực sự chỉ là delta giữa các mốc.
+Nhầm lẫn giữa số tích lũy và số tiêu thụ riêng lẻ: Các trường như thread_token_usage hay turn_token_usage trong log Codex thường là bộ đếm tích lũy (cumulative counter). Việc cộng trực tiếp các mốc này thay vì tính độ chênh lệch (delta) theo trình tự thời gian sẽ làm tổng token bị phóng đại lên nhiều lần.
 
-Trong log Codex cũng có trường hợp tương tự. Một số field như `thread_token_usage` hoặc `turn_token_usage` là cumulative counter. Nếu coi mỗi giá trị như một lần tiêu thụ độc lập rồi cộng lại, tổng token sẽ bị phóng đại.
+Ghi nhận sai mô hình trong chuỗi tác vụ: Khi route có sự thay đổi model hoặc sử dụng subagent, toàn bộ mức tiêu hao dễ bị tính dồn cho model kết thúc sau cùng thay vì chia tách theo từng chặng.
 
-Quy tắc hiện tại là:
+Bỏ qua chi phí sửa sai (re-teaching): Đánh giá task dựa trên turn đầu tiên mà bỏ qua các lượt follow-up, sửa lỗi hay can thiệp để hoàn thiện kết quả.
 
-- ưu tiên token theo từng response khi nguồn có `token_usage_record.payload.usage.total_tokens`;
-- nếu chỉ có cumulative counter thì tính delta theo thứ tự thời gian;
-- khi số theo ngày lệch nhau, kiểm tra local time, UTC và rolling-window boundary trước khi sửa công thức.
+Làm sạch số liệu không đúng cách: Các trường chưa có dữ liệu chi phí bị gán mặc định bằng 0 thay vì đánh dấu unknown, khiến mô hình trông có vẻ tiết kiệm hơn thực tế.
 
-Đó mới chỉ là một kiểu sai. Còn vài trường hợp khác cũng dễ làm benchmark đẹp nhưng sai:
+Quy tắc xử lý trong tracker:
 
-- route đổi model hoặc có subagent nhưng toàn bộ usage lại bị ghi cho model cuối cùng;
-- một first turn rất rẻ nhưng chưa giải quyết xong việc, trong khi các lượt repair/re-teaching bị bỏ khỏi phép tính;
-- cost/usage chưa biết bị biến thành `0`, làm model trông rẻ giả;
-- chỉ so từng turn thay vì tính từ lúc bắt đầu mục tiêu đến lúc kết quả thực sự được chấp nhận.
+Ưu tiên ghi nhận token theo từng response khi log có sẵn token_usage_record.payload.usage.total_tokens.
 
-Vì vậy phần kỹ thuật trong tracker chủ yếu được sinh ra để tránh các lỗi kiểu này, chứ không phải để làm dashboard phức tạp hơn cho đẹp.
+Với các trường là cumulative counter, chỉ tính delta giữa các mốc theo thứ tự thời gian.
+
+Kiểm tra ranh giới múi giờ (local time so với UTC) và rolling-window trước khi hiệu chỉnh công thức tính theo ngày.
+
+Đo lường chi phí xuyên suốt từ lúc bắt đầu mục tiêu đến khi kết quả được nghiệm thu, thay vì chỉ so sánh từng turn đơn lẻ.
 
 ![Usage investigation and cost trend view](docs/screenshots/cost-trend-real.png)
 
-## Từ một turn sang một mission hoàn chỉnh
 
-Nếu một task bắt đầu bằng một prompt, sau đó có sửa yêu cầu, follow-up, “làm tiếp đi”, re-teaching hoặc một model khác vào sửa phần trước, thì so từng turn riêng lẻ rất dễ đánh giá sai.
-
-Usage Tracker vì thế có khái niệm **mission**: một mục tiêu được tính từ lúc bắt đầu cho đến khi nó được chấp nhận, bị bỏ, hoặc vẫn unresolved.
-
-Mission scanner hiện cố gắng:
-
-- đọc cả Codex `sessions` và `archived_sessions`;
-- gom các lượt sửa/follow-up liên quan vào cùng mục tiêu;
-- giữ model, effort và route thay vì chỉ giữ một tổng token vô danh;
-- gắn delegated work về nhiệm vụ cha khi có đủ bằng chứng;
-- đánh dấu route có đổi model hoặc delegated work là `pure_model=false`, để không quy toàn bộ công và cost cho một model duy nhất.
-
-Câu hỏi cuối cùng không còn là “turn này hết bao nhiêu token?”, mà là: **từ lúc bắt đầu đến khi tôi chấp nhận kết quả, route này đã tốn bao nhiêu và phải sửa bao nhiêu lần?**
 
 ![Task outcome review demo](docs/screenshots/task-outcome-review.svg)
 
-## Ma trận hiệu quả cố tình bảo thủ
+## Ma trận về độ tương quan hạn mức tiêu tốn / hoàn thành 1 task
 
-Khi đã có mission, tracker có thể so model theo loại công việc. Nhưng đây cũng là chỗ rất dễ tự tạo ra một benchmark trông thuyết phục mà mẫu lại quá ít.
+a. Vấn đề của cách đo cũ: Đánh giá theo turn đơn lẻ là chưa phản ánh đúng thực tế
+Hiện tại, việc nhìn vào tốc độ tiêu hao tức thời hoặc lượng token của từng lượt phản hồi riêng lẻ (single turn) rất dễ gây hiểu lầm khi chọn model:
 
-Ma trận chỉ nhận mission thỏa:
+Với task đơn giản: Cả model mạnh lẫn model yếu đều có thể làm xong ngay trong một lần chạy. Khi đó, việc bật effort cao (như Sol Extra High) rõ ràng gây lãng phí thừa (thực tế có thể ngốn gấp 1.84 lần so với Sol High).
 
-```text
-accepted && pure_model && total_tokens > 0
-```
+Với task phức tạp (như học setup giao dịch, lập trình web, mô phỏng 3D...):
 
-Mỗi ô model × loại công việc cần ít nhất 3 mẫu trước khi được coi là đủ mẫu. Nếu chưa từng có dữ liệu, UI hiển thị `Chưa có dữ liệu`. Nếu đã có nhưng còn ít, UI hiển thị `Chưa đủ mẫu (n=...)`.
+Các model nhẹ hoặc effort thấp (như GPT-5.5 Low, Sol High) nhìn qua từng turn thì rất rẻ. Nhưng nếu model chưa nắm bắt được vấn đề, người dùng phải giải thích lại nhiều lần, ra lệnh chỉnh sửa liên tục do làm chưa đạt yêu cầu. Mỗi lần sửa là context lại dồn lên, khiến tổng lượng token cộng dồn cho cả nhiệm vụ bị đội lên rất nhiều.
 
-Tracker không lấy hệ số của một loại task khác để lấp vào chỗ đang thiếu. `Sol High` hiện được dùng làm baseline trong cùng category và cùng tập dữ liệu đủ điều kiện; điều đó không có nghĩa Sol High được tuyên bố là model tốt nhất nói chung.
+Ngược lại, model mạnh hơn (như 5.6 Sol Extra High) có chi phí mỗi lượt chạy cao hơn, nhưng khả năng hiểu sâu giúp xử lý dứt điểm chỉ sau 1–2 lần tương tác, không mất công "dạy đi dạy lại". Tính trên toàn bộ nhiệm vụ từ đầu đến cuối, tổng token tiêu hao thực tế đôi khi lại tiết kiệm hơn.
+
+Vì vậy, tracker cần chuyển từ việc đo lường theo từng turn riêng lẻ sang đo tổng lượng token thực tế cần dùng để hoàn thành xong một nhiệm vụ.
+
+b. Phương pháp thu thập và tính toán dữ liệu
+Dựa trên log lịch sử các task đã chạy:
+
+Với model xử lý tốt: Giao lệnh một lần hoàn thành, không phát sinh thêm lượt chỉnh sửa -> Lấy trực tiếp token của session/turn đó.
+
+Với model cần can thiệp: Bao gồm toàn bộ các lượt re-teaching, nhắc lại yêu cầu, sửa lỗi code hoặc điều chỉnh logic cho đến khi kết quả được nghiệm thu -> Cộng dồn toàn bộ token của các lượt này để ra Tổng token / Nhiệm vụ.
+
+c. Cấu trúc bảng ma trận 2 chiều
+Bảng được thiết kế để lượng hóa năng lực và mức độ tiêu hao của từng cặp Model + Effort trên từng nhóm việc cụ thể:
+
+Cột dọc (Loại nhiệm vụ): Phân theo các công việc thực tế hay làm:
+
+Học / Huấn luyện setup giao dịch
+
+Lập trình Web
+
+Mô phỏng 3D / Xử lý thuật toán
+
+(Các đầu việc đặc thù khác...)
+
+Cột ngang (Model + Effort): Các cấu hình đem ra đối chiếu (GPT-5.5 Low/High/XHigh, Sol High/XHigh, Astra...).
+
+Mốc chuẩn tham chiếu (Baseline): Lấy Sol High làm mốc chuẩn 1.00x.
+
+Các ô còn lại hiển thị hệ số tương quan dựa trên tổng token tiêu thụ thực tế để xong việc đó.
+
+Hệ số < 1.00x: Tiết kiệm token hơn Sol High trên cùng loại việc.
+
+Hệ số > 1.00x: Tiêu tốn nhiều token hơn.
+
+Xử lý thiếu số liệu: Với những bài toán chưa từng chạy trên một cấu hình model nhất định, ô tương ứng hiển thị rõ Chưa có dữ liệu, không tự ý nội suy hay gán mặc định bằng 0.
+
+d. Giá trị mang lại
+Chọn model theo số liệu định lượng: Nhìn vào ma trận sẽ biết rõ: loại việc nào đơn giản để giao cho model nhẹ nhằm tiết kiệm quota, và loại việc nào bắt buộc phải dùng model mạnh ngay từ đầu để tránh vòng lặp sửa lỗi tốn kém.
+
+Tính năng phụ trợ cần bổ sung trên UI: Lưu lại trạng thái thiết lập gần nhất (model, bộ lọc, loại task) vào bộ nhớ trình duyệt, tránh việc mỗi lần mở lại giao diện tracker bị reset về mặc định gây bất tiện khi theo dõi.
 
 ![Quota per task demo](docs/screenshots/quota-per-task.svg)
 
@@ -151,17 +164,8 @@ Một lỗi thực tế từng gặp là tiến trình desktop không tìm thấ
 
 Từ đó dự án giữ nguyên tắc: **live app-server là nguồn có thẩm quyền khi kết nối được; fallback vẫn hữu ích nhưng phải được ghi nhãn rõ ràng**.
 
-## Vì sao quota calibration không thể dựa vào một lần nhập %
 
-Cách dễ nhất để ước lượng capacity là nhập một phần trăm quota còn lại rồi suy ngược ra toàn bộ dung lượng. Nhưng phần trăm trong IDE có thể bị làm tròn; hai lần đọc có thể nằm ở hai reset cycle khác nhau; token source có thể khác nhau; và một điểm đo nhiễu có thể kéo estimator đi sai rất xa.
-
-Vì vậy mỗi lần nhập chỉ được xem là **một observation**. Estimator dùng nhiều quan sát, ưu tiên cặp cùng cycle, xét khoảng làm tròn, tách reset boundary, để bằng chứng cũ hết hiệu lực dần, giữ capacity riêng theo source và giữ prior khi bằng chứng mới chưa đủ mạnh.
-
-Nói đơn giản: một điểm đo chỉ giúp neo mô hình; nhiều điểm nhất quán mới đủ để thay đổi kết luận.
-
-## Không trộn các loại bằng chứng
-
-“Token” trên máy không phải lúc nào cũng đến từ cùng một nguồn. Tracker có thể gặp:
+## “Token” trên máy không phải lúc nào cũng đến từ cùng một nguồn. Tracker có thể gặp:
 
 - transcript-estimated token;
 - exact token từ worker/report;
