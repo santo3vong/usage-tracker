@@ -146,25 +146,6 @@ Usage Tracker cũng cố tránh kết luận quá mức từ telemetry thiếu d
 
 Vì vậy cost của ChatGPT Web được xem là estimate/proxy khi không có authoritative source tương ứng, và không nên giả vờ rằng nó cache-comparable với một nguồn có cache telemetry đầy đủ.
 
-## Tiếng Việt / English trong app
-
-UI hỗ trợ `Tiếng Việt` và `English` ngay trên header. Lựa chọn ngôn ngữ được lưu trong browser và phần giao diện động được render lại khi đổi ngôn ngữ, gồm bảng, quota status, toast, dialog, canvas chart và mission review.
-
-README thì được tách thành hai file thật:
-
-- `README.md` — Tiếng Việt;
-- `README.en.md` — English.
-
-Các term như `usage`, `quota`, `token`, `mission`, `baseline`, `rolling window`, `orchestrator/executor` được giữ nguyên khi dịch ra tiếng Việt mà dịch sang từ khác lại khó đọc hơn.
-
-## Nguồn dữ liệu tracker có thể đọc
-
-- Codex local sessions/transcripts.
-- Codex app-server rate-limit RPC khi local Codex tương thích và đang sẵn sàng.
-- Gemini/Antigravity local transcript và account metadata khi phát hiện được.
-- Manual/configured data ở những phần có hỗ trợ fallback.
-
-Usage Tracker không cần hosted backend. UI hiện vẫn tải Google Fonts từ public Google Fonts CDN; avatar URL có thể được hiển thị nếu account metadata cục bộ cung cấp URL đó.
 
 ## Cài đặt và chạy nhanh
 
