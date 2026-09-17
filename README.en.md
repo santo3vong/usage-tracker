@@ -1,286 +1,140 @@
 # Usage Tracker
 
-> Local-first usage, quota, cost, and task-outcome analysis for Codex, Gemini/Antigravity, and other coding-assistant workflows on Windows.
+> Track usage, quota, costs, and task-level efficiency for Codex, Gemini/Antigravity, and Windows-based AI coding workflows — running locally on your machine.
 
 [Tiếng Việt](README.md) · **English**
 
-Usage Tracker grew out of a practical question: **which model is actually efficient for my work, and how much quota does a task like this really consume?**
+This dashboard tracks practical metrics for managing your AI quota.
 
-It is not just a token counter. The tracker connects current usage, 5-hour/weekly quota, cost, model routes, and whether a task was actually finished or required several repair and re-teaching turns.
+> The snapshots below are live captures from Usage Tracker during actual workflows. A few legacy demo images are retained for basic UI illustration.
 
-> The screenshots below include direct captures from Usage Tracker running with real data. Older synthetic demo images may still be used where they are only meant to explain a UI concept.
+## What Makes Usage Tracker Different
 
-## Why I built Usage Tracker
+If you follow AI discussions on X, you have likely come across the idea of pairing Sol as an orchestrator with Luna as an executor to reduce token usage. In practice, however, savings vary considerably and remain hit-or-miss for most users. Workloads heavy on creative exploration or iterative brainstorming can actually consume more tokens this way. Because efficiency depends entirely on your specific workload, this repository provides a dedicated tool to measure and estimate actual quota consumption for your specific tasks, helping you select models based on data rather than guesswork.
 
-At first I only wanted to know how much Codex quota I had left. Then I realized that one quota number or one lifetime token total still did not answer the question I actually cared about.
+Another example: Tibo (head of Codex) previously noted that Astra would be more economical than Sol. However, empirical measurement reveals that cost strictly depends on the workload:
+* **In my specific workflow:** 5.6 Sol Extra High consumes roughly 1.5x compared to Sol High, yet it remains significantly more economical than Astra models (which burn roughly 3x the quota of Sol High). If Sol Extra High's reasoning is sufficient for the task and workload volume is high, running 5.6 Sol Extra High remains the most balanced choice.
+* **Verifying early community reports:** Early benchmarks suggested that Astra Extra High / Max consumed less quota than Astra Low / Medium. Real-world testing on my tasks confirmed this: Astra Extra High proved to be the most quota-efficient among Astra configurations, whereas Low and Medium burned substantially more.
 
-A model can look very cheap on its first turn, yet the result may not be usable. I may have to correct the prompt, explain the goal again, ask it to continue, or bring in another model to repair the work. If I only count that first turn, the model looks efficient. If I count everything until the result is actually accepted, the story can be very different.
+To address these measurement needs, Usage Tracker answers concrete operational questions:
 
-The opposite can also happen: a model may burn quota quickly right now, but for this kind of task it usually finishes with fewer corrections. Looking only at instantaneous usage can also be misleading.
-
-Usage Tracker therefore grew around more practical questions:
-
-- How much Codex quota remains in the 5-hour and weekly windows?
-- Is the number live, log-derived, or estimated?
-- How fast is this model/task burning quota **right now**?
-- For comparable tasks, how much does it **typically** use?
-- Was the task actually completed, or did it require repair/re-teaching turns?
-- If an orchestrator, executor, or subagent was involved, which route should receive the usage and cost?
-- If cost or usage is unknown, can it remain `unknown` instead of silently becoming zero?
+* How much quota does Codex have left in the 5-hour and weekly windows?
+* Is the displayed number live from the log, or an estimate?
+* At what rate is the model burning quota right now?
+* What is the typical consumption for comparable tasks?
+* Is the task fully resolved, or did it require multiple re-teaching and patch turns?
+* When routing through orchestrators, executors, or subagents, which route is billed for the usage?
+* Unrecorded cost or usage fields remain `unknown` rather than defaulting to `0`, preventing skewed statistics.
 
 ![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
 
-## Why both instantaneous and typical usage matter
+## Features: Instantaneous vs. Average Usage
 
-This is one of the main reasons I did not want the tracker to stop at a single “tokens used” number.
+The tracker avoids relying on a single total token column, as an isolated number obscures operational realities:
 
-**Instantaneous/current usage** answers: _how fast is this model or task burning quota right now?_ That matters when a long-running task is in progress and you need to decide whether the current route still makes sense.
+* **Instantaneous usage (current / instantaneous):** Shows the burn rate of a model or task in real time. This helps you monitor progress and decide whether to maintain the current execution route. However, instantaneous values are noisy—they spike during sudden context expansions or prolonged reasoning loops.
+* **Average usage (average / typical):** Serves as a baseline for comparable task categories. To filter out anomalies and outliers, the tracker prioritizes median values once sufficient samples are collected.
 
-But a current reading can be noisy. One unusually hard task, one large context load, or one long brainstorming step can spike usage even when that is not the model's normal behavior.
+Combining both metrics provides early warnings when a task exhibits abnormal burn rates while maintaining an empirical baseline to guide model selection.
 
-**Average/typical usage** answers a different question: _for similar work, what does this model usually cost?_ Where outliers matter, the tracker prefers robust medians and minimum sample requirements instead of treating one observation as a universal rule.
+![Model breakdown and real usage cost view]<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
+<img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
 
-Average alone is not enough either. A healthy historical average can hide a task that is becoming unusually expensive right now.
+## Task-to-Quota Correlation Matrix
 
-That is why the two views belong together:
+### a. The Flaw of Single-Turn Metrics
+Evaluating models solely by instantaneous burn rate or single-turn token consumption easily leads to misinformed choices:
 
-- **current / instantaneous** tells you what is happening to the task in front of you;
-- **average / typical** gives you a baseline for comparable workloads.
+* **Simple tasks:** Both lightweight and heavier models can resolve the prompt in a single turn. In these cases, opting for a higher effort level (such as Sol Extra High) introduces unnecessary overhead (consuming roughly 1.84x compared to Sol High).
+* **Complex tasks (e.g., trading setup training, web development, 3D simulations):**
+  * Lightweight models or low-effort profiles (e.g., GPT-5.5 Low, Sol High) appear cheap per turn. However, if the model struggles to grasp requirements, you must repeatedly explain, intervene, and correct incomplete code. Context accumulates across each turn, inflating cumulative token consumption for the overall mission.
+  * Conversely, a more capable model (e.g., 5.6 Sol Extra High) incurs a higher per-turn cost, but its reasoning depth often resolves the issue in 1–2 turns without repetitive re-teaching. Across the entire mission lifecycle, total token consumption can actually end up lower.
 
-One is an early warning; the other is context.
+Therefore, the tracker transitions from single-turn evaluations to measuring **total tokens consumed to complete a mission**.
 
-![Model breakdown and real usage cost view](docs/screenshots/model-breakdown-real.png)
+### b. Data Collection and Aggregation Logic
+Aggregating data from historical task runs:
 
-## Why “Sol orchestrator + Luna executor” has no universal saving ratio
+* **Single-shot completions:** When a model finishes the task in one attempt with no follow-up revisions required, token usage is captured directly from that session/turn.
+* **Multi-turn revisions:** When intervention is needed—including prompt re-teaching, bug fixing, and logic adjustments until the output is accepted—the tracker sums the tokens across all related turns to compute **Total Tokens / Mission**.
 
-One reasonable idea is to use Sol as an orchestrator for planning and reasoning, then let Luna execute cheaper implementation work. On paper, that sounds like it should always save tokens or quota.
+### c. 2D Matrix Structure
+A 2D matrix quantifies the capability and actual cost profile of each `Model + Effort` configuration across specific workloads:
 
-In practice, the savings vary a lot by user and workload.
+* **Rows (Task Types):** Categorized by real-world workflows:
+  * *Trading setup training / reasoning*
+  * *Web development*
+  * *3D simulation / algorithmic modeling*
+  * *(Other domain-specific workflows...)*
+* **Columns (Model + Effort):** Benchmarked model configurations (GPT-5.5 Low/High/XHigh, Sol High/XHigh, Astra...).
+* **Normalized Baseline:** `Sol High` serves as the `1.00x` baseline.
+  * Cell values reflect the relative ratio based on total tokens consumed to complete the mission.
+  * Ratio `< 1.00x`: More token-efficient than Sol High on that task type.
+  * Ratio `> 1.00x`: Higher token consumption than Sol High.
+* **Handling Missing Data:** Combinations that have not yet been benchmarked explicitly display `No data` rather than interpolating or defaulting to 0.
 
-For repetitive, well-scoped tasks with little need to rethink the plan, a cheaper executor can genuinely help. For creative work, brainstorming, research, difficult debugging, or tasks whose requirements keep moving, an orchestrator/executor route may need to resend context, restate goals, repair executor mistakes, and coordinate additional turns. The total usage can end up similar to — or even higher than — using one stronger model end to end.
+### d. Key Takeaways & Planned UI Enhancements
+* **Quantitative Model Selection:** The matrix provides concrete data on when lighter models are sufficient to conserve quota, and when high-capability models are necessary upfront to prevent costly re-teaching loops.
+* **Persistent UI Settings:** Save the user's latest filter, model, and category selections in browser storage (`localStorage`) to avoid resetting on every launch.
 
-So Usage Tracker does not assume a formula such as “Luna always saves X%.” **Different people have different workloads, so the saving ratio is workload-dependent.**
+![Quota per task demo]<img width="1757" height="687" alt="Ảnh chụp màn hình 2026-09-17 083012" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
 
-The tracker measures your own completed tasks, groups them by task type and route, and shows how much quota those workflows actually consumed. That gives you a way to choose models using your own evidence rather than someone else's universal coefficient.
+## Automated Mission Grouping Is Only a Suggestion
 
-![Quota efficiency comparison from real Usage Tracker capture](docs/screenshots/quota-efficiency-real.png)
+Mission grouping relies on heuristics, which can misjudge mission boundaries or task categories. The dashboard includes a manual review interface to:
 
-## Some obvious-looking accounting methods are wrong
+- Merge a mission with the preceding one;
+- Split the final turn into a new mission;
+- Correct task categories;
+- Mark outcomes as `accepted`, `unresolved`, or `abandoned`;
+- Revert boundaries back to the automated heuristic.
 
-This is surprisingly easy to get wrong if you simply open a log and add every number you see.
+Automation reduces review friction, but an automated inference is never treated as ground truth simply because it was machine-generated.
 
-Imagine a car odometer reading 100 km, then 130 km, then 150 km. You cannot add `100 + 130 + 150` and conclude that the car travelled 380 km. Those are cumulative readings; the real consumption is the delta between observations.
+## From Estimated Quota to Live Quota
 
-Codex logs can contain the same kind of trap. Fields such as `thread_token_usage` and `turn_token_usage` can be cumulative counters. Summing each value as if it were an independent increment can massively overstate total usage.
+The initial version relied heavily on local session transcripts. While adequate for historical reconstruction, it could not determine remaining Codex quota in real time.
 
-The current rule is:
+The tracker has evolved across several layers:
 
-- prefer per-response usage when `token_usage_record.payload.usage.total_tokens` is available;
-- when only cumulative counters are available, derive chronological deltas;
-- when daily totals disagree, check local time, UTC, and rolling-window boundaries before changing the formula.
+1. Scanning local sessions and normalizing records to prevent double-counting.
+2. Separating 5-hour and 7-day windows instead of aggregating into a single quota metric.
+3. Reading rate limits directly from the Codex app-server when supported locally.
+4. Attaching provenance flags so the UI clearly distinguishes live sources from session-log fallbacks.
 
-That is only one failure mode. Other ways to make a benchmark look better than reality include:
+A common real-world issue occurred when the desktop process failed to resolve the `codex` executable via `PATH`. The tracker continued running by quietly falling back to session logs, displaying numbers that appeared valid but were stale.
 
-- assigning an entire mixed-model or subagent route to the final model;
-- counting a cheap first turn while ignoring the repair and re-teaching turns needed to finish the job;
-- turning unknown cost/usage into zero;
-- comparing isolated turns instead of the complete objective through acceptance.
+The project adheres to a strict principle: **the live app-server is authoritative when reachable; fallback data remains useful but must be explicitly labeled**.
 
-Most of the technical machinery in this project exists to prevent those practical measurement mistakes, not to make the dashboard look complicated.
+## Local Tokens Don’t Always Come from the Same Source
 
-![Usage investigation and cost trend view](docs/screenshots/cost-trend-real.png)
+The tracker processes token metrics across distinct ingestion channels:
 
-## From individual turns to complete missions
+- Transcript-estimated tokens;
+- Exact tokens reported by workers/tool outputs;
+- Automatically parsed tokens from Codex session logs;
+- Manual/configured values used as fallbacks.
 
-If a task starts with one prompt and later includes corrections, follow-ups, “continue” requests, re-teaching, or another model repairing earlier work, comparing turns in isolation can be misleading.
+Collapsing these into a single column without provenance makes estimates indistinguishable from exact measurements. The tracker preserves the origin alongside every metric.
 
-Usage Tracker therefore uses the concept of a **mission**: one objective from its beginning until it is accepted, abandoned, or remains unresolved.
+Similarly, unknown costs or token usages remain marked as `unknown`. An `unknown` state is never treated as `$0` or `0 tokens`.
 
-The mission scanner attempts to:
+## ChatGPT Web and Cached Input
 
-- read both Codex `sessions` and `archived_sessions`;
-- group related corrections/follow-ups into the same objective;
-- preserve model, effort, and route instead of reducing everything to an anonymous token total;
-- attach delegated work to the parent task when enough evidence exists;
-- mark model-switching or delegated routes as `pure_model=false`, so one model does not receive all of the credit and cost.
+Usage Tracker avoids over-interpreting incomplete telemetry. If a ChatGPT Web source reports `cached_input_tokens = 0`, it means the tracker received no meaningful cache telemetry from that interface; it **does not prove** that caching was inactive on the platform.
 
-The useful question becomes: **from the first request until I accepted the result, how much did this route consume and how many repair turns did it require?**
+Costs for ChatGPT Web are treated as estimates/proxies in the absence of an authoritative telemetry source, and should not be assumed cache-comparable to sources providing full cache telemetry.
 
-![Task outcome review demo](docs/screenshots/task-outcome-review.svg)
+## Quick Start & Installation
 
-## The efficiency matrix is deliberately conservative
-
-Once missions exist, models can be compared by task category. This is also where it is easy to create an impressive-looking benchmark from too little data.
-
-The matrix only accepts missions that satisfy:
-
-```text
-accepted && pure_model && total_tokens > 0
-```
-
-Each model × task-type cell needs at least 3 samples before it is treated as adequately sampled. A never-observed cell is shown as `No data`. A sparse cell is shown as `Insufficient samples (n=...)`.
-
-The tracker does not borrow a coefficient from another task category to fill the gap. `Sol High` is currently used as a baseline only inside the same category and eligible dataset; that is not a claim that Sol High is universally the best model.
-
-![Quota per task demo](docs/screenshots/quota-per-task.svg)
-
-## Automatic grouping is only a suggestion
-
-Mission grouping is heuristic, so the tracker can guess the wrong boundary or task category. The dashboard therefore includes manual review controls to:
-
-- merge a mission with the previous mission;
-- split the final turn into a new mission;
-- correct the task category;
-- mark `accepted`, `unresolved`, or `abandoned`;
-- restore heuristic boundaries.
-
-Automation should reduce review work, not convert a guess into ground truth simply because a machine produced it.
-
-## From quota guessing to a live quota source
-
-Early versions relied heavily on local sessions and transcripts. Those records are useful for reconstructing history, but they are not enough to answer the live Codex-quota question with confidence.
-
-The tracker therefore evolved in layers:
-
-1. Scan local sessions and normalize records to reduce double counting.
-2. Keep the 5-hour and 7-day windows separate.
-3. When the local Codex runtime supports it, read rate limits directly from the Codex app-server.
-4. Preserve provenance so the UI can distinguish a live source from a session-log fallback.
-
-One real bug made this distinction important: a desktop process sometimes could not discover the `codex` executable through `PATH`. The tracker still ran, but silently fell back to older session-log data. The number looked plausible while being stale.
-
-The project now follows a simple rule: **the live app-server is authoritative when available; fallbacks remain useful but must be labeled clearly.**
-
-## Why quota calibration cannot depend on one percentage entry
-
-The tempting way to estimate capacity is to enter one remaining-quota percentage and solve backwards. In practice, IDE percentages may be rounded, observations may belong to different reset cycles, token evidence may come from different sources, and one noisy point can push an estimator far in the wrong direction.
-
-Each manual entry is therefore treated as **one observation**, not ground truth. The estimator uses multiple observations, prefers same-cycle pairs, respects percentage-rounding ranges, isolates reset boundaries, lets old evidence expire gradually, keeps capacity separated by source, and preserves a prior when new evidence is insufficient.
-
-One observation can anchor the estimate; consistent observations are needed to move it with confidence.
-
-## Evidence sources stay separate
-
-“Tokens” on a local machine can come from different kinds of evidence:
-
-- transcript-estimated tokens;
-- exact tokens from worker/report data;
-- automatically scanned Codex session-log tokens;
-- manual/configured fallback values.
-
-Flattening all of them into one unlabeled column makes an estimate look identical to an exact measurement. Usage Tracker therefore keeps provenance attached to the value.
-
-Likewise, unknown cost or usage stays `unknown`. Unknown is not the same as `$0` or `0 tokens`.
-
-## ChatGPT Web and cached-input telemetry
-
-Usage Tracker also avoids inferring more than a source can prove. If a ChatGPT Web source reports `cached_input_tokens = 0`, that only means useful cache telemetry is unavailable to this tracker; it does **not** prove the platform did not use caching.
-
-ChatGPT Web cost is therefore treated as an estimate/proxy when no authoritative equivalent is available, and it should not be presented as directly cache-comparable with a source that exposes cache-aware telemetry.
-
-## Vietnamese / English UI
-
-The dashboard supports `Tiếng Việt` and `English` from the header. The selected language is stored in the browser and dynamic views re-render when it changes, including tables, quota status, toasts, dialogs, canvas charts, and mission-review screens.
-
-The documentation is also split into two real files:
-
-- `README.md` — Vietnamese;
-- `README.en.md` — English.
-
-Terms such as `usage`, `quota`, `token`, `mission`, `baseline`, `rolling window`, and `orchestrator/executor` are intentionally left in English when translating them would make the Vietnamese version harder to read.
-
-## Data sources the tracker can read
-
-- Codex local sessions/transcripts.
-- Codex app-server rate-limit RPC when the local Codex runtime is compatible and available.
-- Gemini/Antigravity local transcripts and account metadata when detected.
-- Manual/configured data where a fallback is supported.
-
-Usage Tracker does not require a hosted backend. The UI currently loads Google Fonts from the public Google Fonts CDN; an avatar URL may be displayed when local account metadata provides one.
-
-## Requirements and quick start
-
-Current requirements:
+Requirements:
 
 - Windows 10 or Windows 11.
-- Python 3. Usage Tracker prefers a Python runtime bundled with Codex when one is available, then falls back to `py -3` or `python`.
-- A modern browser.
-- Node.js is only required for JavaScript syntax checks during development/CI.
+- Python 3. The tracker prioritizes the Python runtime bundled with Codex if detected, falling back to `py -3` or `python`.
+- A modern web browser.
+- Node.js is only required for JavaScript linting/testing during development/CI.
 
-From the repository directory:
+From the repository root:
 
 ```powershell
 .\start.bat
-```
-
-Or start the server without opening a browser:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start-background.ps1
-```
-
-Then open:
-
-```text
-http://127.0.0.1:5050/
-```
-
-Stop or restart the server with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\stop-server.ps1
-powershell -ExecutionPolicy Bypass -File .\restart-server.ps1
-```
-
-Runtime PID and server logs are stored under `runtime/`.
-
-## Accuracy and provenance
-
-Not every number on the dashboard has the same certainty. Read the source/provenance together with the value:
-
-- **Live / exact**: read directly from a local source that exposes the value.
-- **Log-derived**: calculated from recorded sessions/transcripts.
-- **Estimated / inferred**: derived from observations or proxy data.
-- **Manual / configured**: entered or configured by the user as a fallback.
-
-Cost estimates and inferred quota capacities are analytical aids, not official billing records. Task-outcome classification and mission grouping are heuristic; important or low-sample results should be reviewed before being treated as benchmark evidence.
-
-## Local data and privacy
-
-The following files are intentionally excluded by `.gitignore`:
-
-- `accounts.json`
-- `codex_usage.json`
-- `codex_models_cache.json`
-- `codex_mission_turns_cache.json`
-- `codex_mission_reviews.json`
-- `quota_observations.json`
-- `real_quotas.json`
-- `time_series_history.json`
-- `data.js`
-- `runtime/`
-- `runtime_backups/`
-
-They may contain account identifiers, prompts, local paths, usage history, or other private machine data. **Do not use `git add -f` on these files before reviewing them yourself.**
-
-The public repository should not contain private projects, personal prompt history, or private trading data.
-
-Images under `docs/screenshots/` use synthetic values and task names.
-
-## Development and tests
-
-```powershell
-node --check app.js
-node --check i18n.js
-python -B -m unittest discover -v
-python -B -m py_compile server.py run_server.py
-git diff --check
-```
-
-The test suite covers major paths including usage sources, quota estimation, the model catalog, Codex task outcomes, and Codex app-server rate-limit handling. GitHub Actions runs core checks on Windows.
-
-## Contributing, security, and license
-
-See `CONTRIBUTING.md` for the development/pull-request workflow and `SECURITY.md` for security or privacy reports.
-
-License: MIT, see `LICENSE`.
