@@ -31,7 +31,7 @@ Các chỉ số chưa có dữ liệu sẽ hiển thị unknown, tránh việc g
 
 ![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
 
-## Tính năng: usage tức thời/ usage trung 
+## Tính năng: usage tức thời/ usage trung bình
 
 Tracker không chỉ hiển thị một cột tổng token đã dùng, vì một con số đơn lẻ khó phản ánh đúng tình trạng vận hành:
 
@@ -41,47 +41,10 @@ Usage trung bình (average / typical): Đóng vai trò làm mốc tham chiếu c
 
 Việc kết hợp cả hai chỉ số giúp bạn vừa có cảnh báo sớm khi một task phát sinh chi phí bất thường, vừa có mốc nền tảng (baseline) để so sánh và lựa chọn mô hình phù hợp.
 
-![Model breakdown and real usage cost view](docs/screenshots/model-breakdown-real.png)
+![Model breakdown and real usage cost view]<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
+<img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
+<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/c7933a4b-6d0c-4822-9e1f-85c6f1d674ca" />
 
-## Vì sao “Sol orchestrator + Luna executor” không có một tỷ lệ tiết kiệm cố định
-
-Ý tưởng kết hợp Sol làm orchestrator để lập kế hoạch/chia việc và Luna làm executor thực thi thường được nhắc tới nhằm giảm bớt tiêu hao hạn mức. Tuy nhiên, mức độ hiệu quả thực tế phụ thuộc vào đặc thù từng tác vụ chứ khó có một tỷ lệ cố định:
-
-Với các task phạm vi hẹp, logic rõ ràng: Ít phát sinh thêm lượt chỉnh sửa thì executor nhẹ hơn thường giúp giảm bớt lượng quota sử dụng.
-
-Với các task phức tạp, debug sâu hoặc cần tinh chỉnh nhiều: Việc luân chuyển context giữa các tầng, hướng dẫn lại và sửa các phần executor làm lệch có thể làm tăng số lượt tương tác. Khi đó, tổng hạn mức tiêu hao có thể tương đương, hoặc thậm chí cao hơn việc để một mô hình mạnh xử lý xuyên suốt.
-
-Vì vậy, Usage Tracker không đặt sẵn công thức kiểu mặc định tiết kiệm được một lượng phần trăm nhất định. Mục đích của tracker là đo đạc trên chính luồng việc thực tế của bạn, ghi nhận mức tiêu hao theo từng route để bạn tự đối chiếu và quyết định cách phân bổ mô hình phù hợp.
-
-![Quota efficiency comparison from real Usage Tracker capture](docs/screenshots/quota-efficiency-real.png)
-
-## Có những cách cộng tưởng đúng nhưng lại sai
-
-Nếu chỉ lấy các giá trị trong log cộng dồn lại, số liệu thống kê rất dễ bị sai lệch:
-
-Nhầm lẫn giữa số tích lũy và số tiêu thụ riêng lẻ: Các trường như thread_token_usage hay turn_token_usage trong log Codex thường là bộ đếm tích lũy (cumulative counter). Việc cộng trực tiếp các mốc này thay vì tính độ chênh lệch (delta) theo trình tự thời gian sẽ làm tổng token bị phóng đại lên nhiều lần.
-
-Ghi nhận sai mô hình trong chuỗi tác vụ: Khi route có sự thay đổi model hoặc sử dụng subagent, toàn bộ mức tiêu hao dễ bị tính dồn cho model kết thúc sau cùng thay vì chia tách theo từng chặng.
-
-Bỏ qua chi phí sửa sai (re-teaching): Đánh giá task dựa trên turn đầu tiên mà bỏ qua các lượt follow-up, sửa lỗi hay can thiệp để hoàn thiện kết quả.
-
-Làm sạch số liệu không đúng cách: Các trường chưa có dữ liệu chi phí bị gán mặc định bằng 0 thay vì đánh dấu unknown, khiến mô hình trông có vẻ tiết kiệm hơn thực tế.
-
-Quy tắc xử lý trong tracker:
-
-Ưu tiên ghi nhận token theo từng response khi log có sẵn token_usage_record.payload.usage.total_tokens.
-
-Với các trường là cumulative counter, chỉ tính delta giữa các mốc theo thứ tự thời gian.
-
-Kiểm tra ranh giới múi giờ (local time so với UTC) và rolling-window trước khi hiệu chỉnh công thức tính theo ngày.
-
-Đo lường chi phí xuyên suốt từ lúc bắt đầu mục tiêu đến khi kết quả được nghiệm thu, thay vì chỉ so sánh từng turn đơn lẻ.
-
-![Usage investigation and cost trend view](docs/screenshots/cost-trend-real.png)
-
-
-
-![Task outcome review demo](docs/screenshots/task-outcome-review.svg)
 
 ## Ma trận về độ tương quan hạn mức tiêu tốn / hoàn thành 1 task
 
@@ -135,7 +98,8 @@ Chọn model theo số liệu định lượng: Nhìn vào ma trận sẽ biết
 
 Tính năng phụ trợ cần bổ sung trên UI: Lưu lại trạng thái thiết lập gần nhất (model, bộ lọc, loại task) vào bộ nhớ trình duyệt, tránh việc mỗi lần mở lại giao diện tracker bị reset về mặc định gây bất tiện khi theo dõi.
 
-![Quota per task demo](docs/screenshots/quota-per-task.svg)
+![Quota per task demo]<img width="1757" height="687" alt="Ảnh chụp màn hình 2026-09-17 083012" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
+
 
 ## Tự động phân nhóm chỉ là gợi ý
 
