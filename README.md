@@ -43,7 +43,7 @@ Việc kết hợp cả hai chỉ số giúp bạn vừa có cảnh báo sớm k
 
 ![Model breakdown and real usage cost view]<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
 <img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
-<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/c7933a4b-6d0c-4822-9e1f-85c6f1d674ca" />
+
 
 
 ## Ma trận về độ tương quan hạn mức tiêu tốn / hoàn thành 1 task
