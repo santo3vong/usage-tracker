@@ -51,7 +51,7 @@ CODEX_USAGE_FILE = os.path.join(BASE_DIR, 'codex_usage.json')
 CODEX_MODELS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_models_cache.json')
 CODEX_MISSION_TURNS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_mission_turns_cache.json')
 CODEX_MISSION_REVIEWS_FILE = os.path.join(BASE_DIR, 'codex_mission_reviews.json')
-CODEX_MISSION_TURNS_CACHE_VERSION = 3
+CODEX_MISSION_TURNS_CACHE_VERSION = 4
 QUOTA_OBSERVATIONS_FILE = os.path.join(BASE_DIR, 'quota_observations.json')
 REAL_QUOTAS_FILE = os.path.join(BASE_DIR, 'real_quotas.json')
 VSCDB_PATH = os.path.expanduser(os.path.join('~', 'AppData', 'Roaming', 'Antigravity IDE', 'User', 'globalStorage', 'state.vscdb'))
@@ -3836,6 +3836,206 @@ def _median_numeric(values):
     return clean[mid] if len(clean) % 2 else (clean[mid - 1] + clean[mid]) / 2.0
 
 
+def _codex_ratio_bridge_graph(context_values):
+    """Build pairwise model-ratio edges from contexts where models overlap.
+
+    ``context_values`` maps a context key (task category, local day, ...) to
+    positive model metrics.  Each context contributes one ratio observation per
+    model pair; edge values are robust medians across overlapping contexts.
+    """
+    pair_samples = {}
+    for context_key, raw_values in (context_values or {}).items():
+        if not isinstance(raw_values, dict):
+            continue
+        values = {}
+        for model_key, raw_value in raw_values.items():
+            if not isinstance(model_key, str) or not model_key:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(value) and value > 0:
+                values[model_key] = value
+        model_keys = sorted(values)
+        for index, left in enumerate(model_keys):
+            for right in model_keys[index + 1:]:
+                ratio = values[left] / values[right]
+                if not math.isfinite(ratio) or ratio <= 0:
+                    continue
+                pair_samples.setdefault((left, right), []).append({
+                    'ratio': ratio,
+                    'context': str(context_key),
+                })
+
+    graph = {}
+    for (left, right), samples in pair_samples.items():
+        ratio = _median_numeric(sample.get('ratio') for sample in samples)
+        if not ratio or ratio <= 0:
+            continue
+        contexts = [sample.get('context') for sample in samples if sample.get('context')]
+        edge = {
+            'ratio': float(ratio),
+            'evidence_count': len(samples),
+            'contexts': contexts,
+        }
+        graph.setdefault(left, {})[right] = edge
+        graph.setdefault(right, {})[left] = {
+            'ratio': 1.0 / float(ratio),
+            'evidence_count': len(samples),
+            'contexts': contexts,
+        }
+    return graph
+
+
+def _codex_find_bridge_ratio(graph, source_model, target_model, max_hops=4):
+    """Return the strongest shortest ratio path from source to target."""
+    if not source_model or not target_model:
+        return None
+    if source_model == target_model:
+        return {
+            'ratio': 1.0,
+            'path': [source_model],
+            'hops': 0,
+            'support': 0,
+            'edge_evidence_total': 0,
+        }
+    if source_model not in (graph or {}) or target_model not in (graph or {}):
+        return None
+    try:
+        hop_limit = max(1, min(8, int(max_hops)))
+    except (TypeError, ValueError, OverflowError):
+        hop_limit = 4
+
+    queue = [(source_model, 1.0, [source_model], None, 0)]
+    candidates = []
+    shortest_hops = None
+    while queue:
+        current, ratio_so_far, path, support, evidence_total = queue.pop(0)
+        hops = len(path) - 1
+        if hops >= hop_limit or (shortest_hops is not None and hops >= shortest_hops):
+            continue
+        neighbors = (graph or {}).get(current) or {}
+        ordered = sorted(
+            neighbors.items(),
+            key=lambda item: (-int((item[1] or {}).get('evidence_count') or 0), item[0]),
+        )
+        for neighbor, edge in ordered:
+            if neighbor in path:
+                continue
+            try:
+                edge_ratio = float((edge or {}).get('ratio'))
+                edge_evidence = int((edge or {}).get('evidence_count') or 0)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(edge_ratio) or edge_ratio <= 0:
+                continue
+            next_path = path + [neighbor]
+            next_ratio = ratio_so_far * edge_ratio
+            next_support = edge_evidence if support is None else min(support, edge_evidence)
+            next_total = evidence_total + edge_evidence
+            next_hops = len(next_path) - 1
+            if neighbor == target_model:
+                if shortest_hops is None:
+                    shortest_hops = next_hops
+                if next_hops == shortest_hops:
+                    candidates.append({
+                        'ratio': next_ratio,
+                        'path': next_path,
+                        'hops': next_hops,
+                        'support': next_support or 0,
+                        'edge_evidence_total': next_total,
+                    })
+                continue
+            if shortest_hops is None or next_hops < shortest_hops:
+                queue.append((neighbor, next_ratio, next_path, next_support, next_total))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (
+        -int(item.get('support') or 0),
+        -int(item.get('edge_evidence_total') or 0),
+        tuple(item.get('path') or []),
+    ))
+    return candidates[0]
+
+
+def _codex_bridge_confidence(bridge):
+    """Estimated ratios are intentionally capped below direct high confidence."""
+    if not isinstance(bridge, dict):
+        return 'low'
+    hops = int(bridge.get('hops') or 0)
+    support = int(bridge.get('support') or 0)
+    if hops <= 2 and support >= 2:
+        return 'medium'
+    return 'low'
+
+
+def _codex_estimate_baseline_from_anchors(anchor_values, graph, baseline_model,
+                                           prefer_excluding=None, max_hops=4):
+    """Estimate a missing baseline from measured anchors connected by ratio bridges."""
+    candidates = []
+    for anchor_model, raw_value in (anchor_values or {}).items():
+        if anchor_model == baseline_model:
+            continue
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(value) or value <= 0:
+            continue
+        bridge = _codex_find_bridge_ratio(
+            graph, anchor_model, baseline_model, max_hops=max_hops
+        )
+        if not bridge:
+            continue
+        bridge_ratio = float(bridge.get('ratio') or 0)
+        if not math.isfinite(bridge_ratio) or bridge_ratio <= 0:
+            continue
+        estimated_value = value / bridge_ratio
+        if not math.isfinite(estimated_value) or estimated_value <= 0:
+            continue
+        candidates.append({
+            'anchor_model': anchor_model,
+            'anchor_value': value,
+            'estimated_baseline': estimated_value,
+            'bridge': bridge,
+        })
+
+    if prefer_excluding:
+        alternatives = [
+            candidate for candidate in candidates
+            if candidate.get('anchor_model') != prefer_excluding
+        ]
+        if alternatives:
+            candidates = alternatives
+    if not candidates:
+        return None
+
+    estimate = _median_numeric(candidate.get('estimated_baseline') for candidate in candidates)
+    if not estimate or estimate <= 0:
+        return None
+    representative = min(
+        candidates,
+        key=lambda candidate: (
+            abs(float(candidate.get('estimated_baseline') or 0) - estimate),
+            int((candidate.get('bridge') or {}).get('hops') or 99),
+            -int((candidate.get('bridge') or {}).get('support') or 0),
+            candidate.get('anchor_model') or '',
+        ),
+    )
+    bridge_confidence = _codex_bridge_confidence(representative.get('bridge'))
+    if len(candidates) >= 2 and bridge_confidence == 'low':
+        bridge_confidence = 'medium'
+    return {
+        'value': float(estimate),
+        'candidate_count': len(candidates),
+        'anchors': [candidate.get('anchor_model') for candidate in candidates],
+        'representative': representative,
+        'confidence': bridge_confidence,
+    }
+
+
 def _same_codex_quota_cycle(a, b, tolerance_seconds=180):
     if not isinstance(a, dict) or not isinstance(b, dict):
         return False
@@ -4020,13 +4220,45 @@ def build_codex_quota_efficiency(quota_observations, min_quota_delta=2.0):
     }
 
 
+def _codex_quota_bridge_graph(dated_intervals, cutoff_dt):
+    """Learn model-to-model quota-efficiency ratios from historical same-day overlap."""
+    by_day_model = {}
+    for item in dated_intervals or []:
+        end_dt = item.get('_end_dt') if isinstance(item, dict) else None
+        if not isinstance(end_dt, datetime) or end_dt > cutoff_dt:
+            continue
+        model_key = item.get('model_key')
+        if not isinstance(model_key, str) or not model_key:
+            continue
+        try:
+            value = float(item.get('tokens_per_quota_pct'))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not math.isfinite(value) or value <= 0:
+            continue
+        day_key = end_dt.astimezone().date().isoformat()
+        by_day_model.setdefault(day_key, {}).setdefault(model_key, []).append(value)
+
+    contexts = {}
+    for day_key, model_values in by_day_model.items():
+        context = {}
+        for model_key, values in model_values.items():
+            median_value = _median_numeric(values)
+            if median_value and median_value > 0:
+                context[model_key] = median_value
+        if len(context) >= 2:
+            contexts[day_key] = context
+    return _codex_ratio_bridge_graph(contexts)
+
+
 def build_codex_quota_efficiency_timeline(quota_observations, now=None, range_days=90,
                                           window_days_options=(1, 3, 7),
                                           min_quota_delta=1.0):
     """Build local rolling quota-efficiency medians for detecting model changes over time.
 
-    Each daily point only compares a model with Sol High observations inside the same
-    trailing window. This avoids applying an old global baseline to a newer model sample.
+    Direct comparisons use Sol High observations inside the same trailing window.  When
+    Sol High is absent, the baseline may be estimated through historical same-day model
+    overlaps.  Model-local points are retained even when no bridge is available.
     """
     now_utc = now if isinstance(now, datetime) else datetime.now(timezone.utc)
     if now_utc.tzinfo is None:
@@ -4075,47 +4307,75 @@ def build_codex_quota_efficiency_timeline(quota_observations, now=None, range_da
             grouped = {}
             for item in nearby:
                 grouped.setdefault(item.get('model_key'), []).append(item)
+            grouped_values = {}
+            for model_key, samples in grouped.items():
+                tokens_per_pct = _median_numeric(
+                    sample.get('tokens_per_quota_pct') for sample in samples
+                )
+                if isinstance(model_key, str) and model_key and tokens_per_pct and tokens_per_pct > 0:
+                    grouped_values[model_key] = tokens_per_pct
             baseline_samples = grouped.get(baseline_key) or []
             baseline_tpp = _median_numeric(
                 sample.get('tokens_per_quota_pct') for sample in baseline_samples
             )
-            if not baseline_tpp or baseline_tpp <= 0:
-                continue
-            baseline_confidence = _codex_quota_interval_confidence(baseline_samples)
+            baseline_source = 'direct' if baseline_tpp and baseline_tpp > 0 else 'unavailable'
+            baseline_bridge = None
+            if baseline_source != 'direct' and grouped_values:
+                bridge_graph = _codex_quota_bridge_graph(dated_intervals, day_end)
+                baseline_bridge = _codex_estimate_baseline_from_anchors(
+                    grouped_values, bridge_graph, baseline_key
+                )
+                if baseline_bridge and baseline_bridge.get('value', 0) > 0:
+                    baseline_tpp = float(baseline_bridge['value'])
+                    baseline_source = 'bridge'
+            if baseline_source == 'direct':
+                baseline_confidence = _codex_quota_interval_confidence(baseline_samples)
+            elif baseline_source == 'bridge':
+                baseline_confidence = baseline_bridge.get('confidence') or 'low'
+            else:
+                baseline_confidence = None
             baseline_quota_span = sum(
                 float(sample.get('quota_delta_pct') or 0) for sample in baseline_samples
             )
             baseline_sessions = {
                 sample.get('session') for sample in baseline_samples if sample.get('session')
             }
+            representative_bridge = (baseline_bridge or {}).get('representative') or {}
+            representative_path = representative_bridge.get('bridge') or {}
 
-            for model_key, samples in grouped.items():
-                if not isinstance(model_key, str) or not model_key:
-                    continue
-                tokens_per_pct = _median_numeric(
-                    sample.get('tokens_per_quota_pct') for sample in samples
-                )
-                if not tokens_per_pct or tokens_per_pct <= 0:
-                    continue
+            for model_key, tokens_per_pct in grouped_values.items():
+                samples = grouped.get(model_key) or []
                 model_confidence = _codex_quota_interval_confidence(samples)
                 confidence_rank = {'low': 0, 'medium': 1, 'high': 2}
-                confidence = min(
-                    (model_confidence, baseline_confidence),
-                    key=lambda value: confidence_rank.get(value, 0),
-                )
+                confidence = model_confidence
+                if baseline_confidence:
+                    confidence = min(
+                        (model_confidence, baseline_confidence),
+                        key=lambda value: confidence_rank.get(value, 0),
+                    )
                 last_sample = max(samples, key=lambda sample: sample['_end_dt'])
                 model_meta.setdefault(model_key, {
                     'model_key': model_key,
                     'model_id': last_sample.get('model_id') or model_key,
                     'reasoning_effort': last_sample.get('reasoning_effort') or 'medium',
                 })
+                relative_burn = None
+                if baseline_tpp and baseline_tpp > 0:
+                    relative_burn = round(baseline_tpp / tokens_per_pct, 3)
                 points_by_model.setdefault(model_key, []).append({
                     'date': date_key,
-                    'relative_quota_burn_vs_sol_high': round(baseline_tpp / tokens_per_pct, 3),
+                    'relative_quota_burn_vs_sol_high': relative_burn,
                     'tokens_per_quota_pct': round(tokens_per_pct, 2),
-                    'baseline_tokens_per_quota_pct': round(baseline_tpp, 2),
+                    'baseline_tokens_per_quota_pct': round(baseline_tpp, 2) if baseline_tpp else None,
+                    'baseline_source': baseline_source,
+                    'comparison_estimated': baseline_source == 'bridge',
                     'sample_count': len(samples),
                     'baseline_sample_count': len(baseline_samples),
+                    'baseline_estimate_anchor_count': int((baseline_bridge or {}).get('candidate_count') or 0),
+                    'bridge_anchor_model': representative_bridge.get('anchor_model'),
+                    'bridge_path': representative_path.get('path') or [],
+                    'bridge_hops': int(representative_path.get('hops') or 0),
+                    'bridge_support': int(representative_path.get('support') or 0),
                     'quota_span_pct': round(sum(float(s.get('quota_delta_pct') or 0) for s in samples), 2),
                     'session_count': len({s.get('session') for s in samples if s.get('session')}),
                     'baseline_quota_span_pct': round(baseline_quota_span, 2),
@@ -4176,9 +4436,11 @@ def build_codex_quota_efficiency_timeline(quota_observations, now=None, range_da
         'observation_count': observation_count,
         'generated_at': now_utc.isoformat(),
         'note': (
-            'Daily trailing-window medians from local Codex rate-limit snapshots; each point '
-            'uses Sol High samples from the same window. Confidence is capped by the weaker side '
-            'of the comparison. This is not an official OpenAI weight.'
+            'Daily trailing-window medians from local Codex rate-limit snapshots. Same-window '
+            'Sol High samples are preferred; when absent, the baseline may be estimated through '
+            'historical overlap bridges. Model-local observations remain visible even when no '
+            'comparison bridge exists. Confidence is capped by the weaker side. This is not an '
+            'official OpenAI weight.'
         ),
     }
 
@@ -4583,6 +4845,7 @@ CODEX_MISSION_OUTCOME_OVERRIDES = {'accepted', 'unresolved', 'abandoned'}
 def _codex_plain_text(value):
     text = unicodedata.normalize('NFD', str(value or '').lower())
     text = ''.join(ch for ch in text if unicodedata.category(ch) != 'Mn')
+    text = text.replace('đ', 'd')
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -4655,11 +4918,70 @@ def _empty_codex_mission_turn(turn_id, timestamp=None):
         'reasoning_effort': '',
         'cwd': '',
         'user_text': '',
+        'user_messages': [],
         'user_chars': 0,
         'user_tokens_est': 0,
         'user_message_count': 0,
         'assistant_message_count': 0,
     }
+
+
+def _expand_codex_mission_turn(raw_turn):
+    """Split one outer Codex task into stable logical turns per human message."""
+    if not isinstance(raw_turn, dict):
+        return []
+    outer = dict(raw_turn)
+    outer_turn_id = str(outer.get('turn_id') or '')
+    if not outer_turn_id:
+        return []
+    raw_messages = outer.get('user_messages') if isinstance(outer.get('user_messages'), list) else []
+    messages = [item for item in raw_messages if isinstance(item, dict) and str(item.get('text') or '').strip()]
+    if not messages:
+        text = str(outer.get('user_text') or '').strip()
+        if not text:
+            return []
+        messages = [{
+            'text': text,
+            'started_at': outer.get('started_at') or '',
+            'user_chars': outer.get('user_chars') or len(text),
+            'user_tokens_est': outer.get('user_tokens_est') or estimate_tokens(text),
+            'assistant_message_count': outer.get('assistant_message_count') or 0,
+            'model_key': outer.get('model_key') or '',
+            'model_id': outer.get('model_id') or '',
+            'reasoning_effort': outer.get('reasoning_effort') or '',
+            'cwd': outer.get('cwd') or '',
+        }]
+
+    logical_turns = []
+    for index, message in enumerate(messages):
+        text = str(message.get('text') or '').strip()
+        started_at = _codex_timestamp_iso(message.get('started_at') or outer.get('started_at'))
+        next_started_at = ''
+        if index + 1 < len(messages):
+            next_started_at = _codex_timestamp_iso(messages[index + 1].get('started_at'))
+        logical_id = outer_turn_id if index == 0 else f'{outer_turn_id}__u{index + 1}'
+        logical = dict(outer)
+        logical.update({
+            'turn_id': logical_id,
+            'outer_turn_id': outer_turn_id,
+            'usage_task_id': outer_turn_id,
+            'logical_user_index': index,
+            'started_at': started_at,
+            'completed_at': next_started_at or _codex_timestamp_iso(outer.get('completed_at')),
+            'completed': bool(next_started_at) or bool(outer.get('completed')),
+            'model_key': str(message.get('model_key') or outer.get('model_key') or ''),
+            'model_id': str(message.get('model_id') or outer.get('model_id') or ''),
+            'reasoning_effort': str(message.get('reasoning_effort') or outer.get('reasoning_effort') or ''),
+            'cwd': str(message.get('cwd') or outer.get('cwd') or ''),
+            'user_text': text,
+            'user_chars': _safe_nonnegative_int(message.get('user_chars')) or len(text),
+            'user_tokens_est': _safe_nonnegative_int(message.get('user_tokens_est')) or estimate_tokens(text),
+            'user_message_count': 1,
+            'assistant_message_count': _safe_nonnegative_int(message.get('assistant_message_count')),
+        })
+        logical.pop('user_messages', None)
+        logical_turns.append(logical)
+    return logical_turns
 
 
 def _valid_codex_mission_turns_cache_entry(entry):
@@ -4939,14 +5261,32 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                             message = _codex_message_text(payload)
                             if _is_codex_injected_user_context(message):
                                 continue
-                            existing = str(turn.get('user_text') or '')
-                            if message and message not in existing:
+                            if message:
+                                existing = str(turn.get('user_text') or '')
                                 turn['user_text'] = ((existing + '\n' + message).strip())[:1600]
                                 turn['user_chars'] = _safe_nonnegative_int(turn.get('user_chars')) + len(message)
                                 turn['user_tokens_est'] = _safe_nonnegative_int(turn.get('user_tokens_est')) + estimate_tokens(message)
                                 turn['user_message_count'] = _safe_nonnegative_int(turn.get('user_message_count')) + 1
+                                messages = turn.setdefault('user_messages', [])
+                                if isinstance(messages, list):
+                                    messages.append({
+                                        'text': message[:1600],
+                                        'started_at': _codex_timestamp_iso(timestamp),
+                                        'user_chars': len(message),
+                                        'user_tokens_est': estimate_tokens(message),
+                                        'assistant_message_count': 0,
+                                        'model_key': str(turn.get('model_key') or ''),
+                                        'model_id': str(turn.get('model_id') or ''),
+                                        'reasoning_effort': str(turn.get('reasoning_effort') or ''),
+                                        'cwd': str(turn.get('cwd') or current_cwd or ''),
+                                    })
                         elif role == 'assistant':
                             turn['assistant_message_count'] = _safe_nonnegative_int(turn.get('assistant_message_count')) + 1
+                            messages = turn.get('user_messages')
+                            if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
+                                messages[-1]['assistant_message_count'] = (
+                                    _safe_nonnegative_int(messages[-1].get('assistant_message_count')) + 1
+                                )
         except Exception:
             discovery_truncated = True
             continue
@@ -4966,7 +5306,7 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
     if cache_modified:
         _atomic_write_json(cache_path, cache_store)
 
-    merged_turns = {}
+    merged_outer_turns = {}
     for file_key, entry in cache_files.items():
         if not _valid_codex_mission_turns_cache_entry(entry):
             continue
@@ -4978,7 +5318,7 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
             turn['started_at'] = _codex_timestamp_iso(turn.get('started_at'))
             turn['completed_at'] = _codex_timestamp_iso(turn.get('completed_at'))
             turn['source_file'] = file_key
-            prior = merged_turns.get(turn['turn_id'])
+            prior = merged_outer_turns.get(turn['turn_id'])
             if prior is None or (
                 _safe_nonnegative_int(turn.get('user_chars')),
                 str(turn.get('completed_at') or turn.get('started_at') or '')
@@ -4986,9 +5326,11 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                 _safe_nonnegative_int(prior.get('user_chars')),
                 str(prior.get('completed_at') or prior.get('started_at') or '')
             ):
-                merged_turns[turn['turn_id']] = turn
+                merged_outer_turns[turn['turn_id']] = turn
 
-    turns = [turn for turn in merged_turns.values() if turn.get('user_text')]
+    turns = []
+    for outer_turn in merged_outer_turns.values():
+        turns.extend(_expand_codex_mission_turn(outer_turn))
     turns.sort(key=lambda turn: (str(turn.get('started_at') or ''), turn.get('turn_id') or ''))
     return {
         'available': bool(turns),
@@ -5061,12 +5403,38 @@ def update_codex_mission_review(body, reviews_file=None):
         review = missions.get(anchor)
         if not isinstance(review, dict):
             review = {}
+        if 'categories' in body:
+            raw_categories = body.get('categories')
+            if raw_categories in (None, 'auto'):
+                raw_categories = []
+            if not isinstance(raw_categories, list):
+                raise ValueError('Invalid task categories')
+            categories = []
+            for raw_category in raw_categories:
+                category = str(raw_category or '').strip()
+                if not category or category == 'auto':
+                    continue
+                if category not in CODEX_TASK_CATEGORY_KEYS:
+                    raise ValueError('Invalid task category')
+                if category not in categories:
+                    categories.append(category)
+            if categories:
+                review['categories'] = categories
+                # Preserve the legacy scalar field for old review files/UI code.
+                review['category'] = categories[0]
+            else:
+                review.pop('categories', None)
+                review.pop('category', None)
         if 'category' in body:
             category = str(body.get('category') or 'auto')
             if category == 'auto':
                 review.pop('category', None)
+                if 'categories' not in body:
+                    review.pop('categories', None)
             elif category in CODEX_TASK_CATEGORY_KEYS:
                 review['category'] = category
+                if 'categories' not in body:
+                    review['categories'] = [category]
             else:
                 raise ValueError('Invalid task category')
         if 'outcome' in body:
@@ -5077,6 +5445,19 @@ def update_codex_mission_review(body, reviews_file=None):
                 review['outcome'] = outcome
             else:
                 raise ValueError('Invalid mission outcome')
+        if 'repair_of_anchor_turn_id' in body:
+            repair_anchor = body.get('repair_of_anchor_turn_id')
+            if repair_anchor == 'auto':
+                review.pop('repair_of_anchor_turn_id', None)
+            elif repair_anchor in (None, '', 'none'):
+                # Keep an explicit null so the user can suppress an incorrect
+                # automatic repair link without changing mission boundaries.
+                review['repair_of_anchor_turn_id'] = None
+            else:
+                repair_anchor = str(repair_anchor)
+                if not safe_id.fullmatch(repair_anchor) or repair_anchor == anchor:
+                    raise ValueError('Invalid repair mission anchor')
+                review['repair_of_anchor_turn_id'] = repair_anchor
         review['updated_at'] = datetime.now(timezone.utc).isoformat()
         if set(review) == {'updated_at'}:
             missions.pop(anchor, None)
@@ -5090,47 +5471,86 @@ def update_codex_mission_review(body, reviews_file=None):
     return data
 
 
-def _codex_task_category(text, cwd=''):
-    combined = _codex_plain_text(f'{cwd} {text}')
+def _codex_task_categories(text, cwd=''):
+    prompt_text = _codex_plain_text(text)
     path_text = _codex_plain_text(cwd).replace('\\', '/')
+    scores = {}
 
-    if any(token in path_text for token in ('trading', 'backtest', 'forex', 'market-replay')) or any(
-        token in combined for token in ('trading setup', 'setup giao dich', 'giao dich', 'backtest',
-                                        'market replay', 'stop loss', 'take profit', 'risk management',
-                                        'quan ly rui ro', 'out of sample', 'oos', 'lenh giao dich')
-    ):
-        return 'trading_setup', 'high'
-    if any(token in path_text for token in ('cockpit360', 'su-30', 'su30')) or any(
-        token in combined for token in ('mo phong 3d', 'cockpit360', 'three.js', 'threejs',
-                                        'viewport 3d', 'hotspot 3d', 'buong lai 3d')
-    ):
-        return 'simulation_3d', 'high'
-    if 'usage-tracker' in path_text or 'usage tracker' in combined or any(
-        token in combined for token in ('lam web', 'website', 'dashboard', 'frontend', 'giao dien web',
+    def add(category, score):
+        scores[category] = max(scores.get(category, 0), score)
+
+    if any(token in path_text for token in ('trading', 'backtest', 'forex', 'market-replay')):
+        add('trading_setup', 3)
+    if any(token in prompt_text for token in ('trading setup', 'setup giao dich', 'giao dich', 'backtest',
+                                            'market replay', 'stop loss', 'take profit', 'risk management',
+                                            'quan ly rui ro', 'out of sample', 'oos', 'lenh giao dich')):
+        add('trading_setup', 3)
+
+    if any(token in path_text for token in ('cockpit360', 'su-30', 'su30')):
+        add('simulation_3d', 3)
+    if any(token in prompt_text for token in ('mo phong 3d', 'cockpit360', 'three.js', 'threejs',
+                                            'viewport 3d', 'hotspot 3d', 'buong lai 3d')):
+        add('simulation_3d', 3)
+
+    # A workspace path is useful context, but it must not hide another explicit
+    # function in the prompt (for example document repair + permission diagnosis).
+    if 'usage-tracker' in path_text:
+        add('web', 2)
+    if 'usage tracker' in prompt_text or any(
+        token in prompt_text for token in ('lam web', 'website', 'dashboard', 'frontend', 'giao dien web',
                                         'html', 'css', 'javascript', 'bieu do', 'bang xep hang model')
     ):
-        return 'web', 'high'
-    if any(token in combined for token in ('docx', 'microsoft word', 'file word', 'pdf', 'ocr',
-                                            'unicode', 'vni', 'bien ban', 'tai lieu', 'spreadsheet',
-                                            'excel', 'slide')):
-        return 'documents', 'high'
-    if any(token in combined for token in ('wifi', 'o dia', 'chkdsk', 'windows', 'listener',
-                                            'cong 5050', 'server khong chay', 'mat ket noi',
-                                            'chan doan he thong', 'rate limit khong cap nhat')):
-        return 'system_diagnostics', 'medium'
-    if any(token in combined for token in ('gpt 6 astra', 'model astra', 'suy luan',
+        add('web', 3)
+
+    if any(token in prompt_text for token in (
+        'docx', 'microsoft word', 'file word', 'pdf', 'ocr', 'unicode', 'vni', 'bien ban',
+        'tai lieu', 'spreadsheet', 'excel', 'slide', 'ho so', 'ly lich', 'que quan',
+        'trinh do', 'cap hoc', 'dong chi', 'nhan su',
+    )):
+        add('documents', 3)
+
+    if any(token in prompt_text for token in (
+        'wifi', 'o dia', 'chkdsk', 'windows', 'listener', 'cong 5050', 'server khong chay',
+        'mat ket noi', 'chan doan he thong', 'rate limit khong cap nhat', 'quyen doc',
+        'quyen ghi', 'chan quyen', 'permission denied', 'permission', 'filesystem',
+        'sandbox', 'command rejected', 'khong doc duoc', 'khong ghi duoc',
+    )):
+        add('system_diagnostics', 3)
+
+    if any(token in prompt_text for token in ('gpt 6 astra', 'model astra', 'suy luan',
                                             'reasoning effort', 'model reasoning')):
-        return 'research', 'high'
-    if any(token in combined for token in ('github', 'git la sao', 'git repo')):
-        return 'software_debugging', 'high'
-    if any(token in combined for token in ('nghien cuu', 'tra cuu', 'kiem chung', 'xac minh nguon',
+        add('research', 3)
+    if any(token in prompt_text for token in ('nghien cuu', 'tra cuu', 'kiem chung', 'xac minh nguon',
                                             'so sanh model', 'danh gia model', 'bai viet tren x',
                                             'artificial analysis')):
-        return 'research', 'medium'
-    if any(token in combined for token in ('sua loi', 'bug', 'refactor', 'unit test', 'test suite',
-                                            'ma nguon', 'lap trinh', 'python', 'repository')):
-        return 'software_debugging', 'medium'
-    return 'other', 'low'
+        add('research', 2)
+
+    if any(token in prompt_text for token in ('github', 'git la sao', 'git repo')):
+        add('software_debugging', 3)
+    if any(token in prompt_text for token in (
+        'sua loi phan mem', 'loi phan mem', 'bug', 'refactor', 'unit test', 'test suite',
+        'ma nguon', 'lap trinh', 'python', 'repository', 'stack trace', 'exception',
+    )):
+        add('software_debugging', 2)
+
+    if not scores:
+        return ['other'], 'other', 'low', False
+
+    category_order = {item['key']: index for index, item in enumerate(CODEX_TASK_CATEGORIES)}
+    ordered = sorted(scores, key=lambda key: (-scores[key], category_order.get(key, 999)))
+    strongest = scores[ordered[0]]
+    categories = [key for key in ordered if scores[key] >= max(2, strongest - 1)]
+    primary = ordered[0]
+    confidence = 'high' if strongest >= 3 else 'medium'
+    ambiguous = len([key for key in categories if scores[key] == strongest]) > 1
+    if ambiguous:
+        confidence = 'medium'
+    return categories, primary, confidence, ambiguous
+
+
+def _codex_task_category(text, cwd=''):
+    _, primary, confidence, _ = _codex_task_categories(text, cwd)
+    return primary, confidence
 
 
 def _codex_prompt_flags(text):
@@ -5147,7 +5567,8 @@ def _codex_prompt_flags(text):
         'lam tiep', 'tiep tuc', 'ban lam di', 'sao ban dung', 'chua xong', 'chua dung',
         'khong dung', 'sai', 'sua lai', 'van chua', 'van bi', 'them nua', 'dong thoi',
         'bo sung', 'con cai', 'cho nay', 'cai nay', 'vua roi', 'toi hoi cai', 'y toi la',
-        'giai thich lai', 'giang lai', 'vay gio',
+        'giai thich lai', 'giang lai', 'vay gio', 'luc nay', 'con may', 'the ban',
+        'the thi', 'sua di', 'ban sua', 'sao lai', 'sao no lai', 'kiem tra lai',
     )
     new_work = (
         'nhiem vu tiep theo', 'y tuong tiep theo', 'toi co them y tuong', 'gio toi muon',
@@ -5168,12 +5589,39 @@ def _codex_prompt_flags(text):
     }
 
 
-def _codex_usage_by_turn(recent_events):
+def _codex_usage_by_turn(recent_events, logical_turns=None):
     grouped = {}
     events = [event for event in (recent_events or []) if isinstance(event, dict) and event.get('task_id')]
     events.sort(key=lambda event: str(event.get('ts') or ''))
+    logical_by_outer = {}
+    for raw_turn in logical_turns or []:
+        if not isinstance(raw_turn, dict) or not raw_turn.get('turn_id'):
+            continue
+        outer_turn_id = str(raw_turn.get('outer_turn_id') or raw_turn.get('usage_task_id') or '')
+        if not outer_turn_id:
+            continue
+        logical_by_outer.setdefault(outer_turn_id, []).append(raw_turn)
+    for turns in logical_by_outer.values():
+        turns.sort(key=lambda turn: (
+            str(turn.get('started_at') or ''),
+            _safe_nonnegative_int(turn.get('logical_user_index')),
+            str(turn.get('turn_id') or ''),
+        ))
+
     for event in events:
-        turn_id = str(event.get('task_id') or '')
+        task_id = str(event.get('task_id') or '')
+        turn_id = task_id
+        candidates = logical_by_outer.get(task_id) or []
+        if candidates:
+            event_dt = _parse_iso_utc(event.get('ts'))
+            selected = candidates[0]
+            if event_dt is not None:
+                for candidate in candidates:
+                    candidate_dt = _parse_iso_utc(candidate.get('started_at'))
+                    if candidate_dt is None or candidate_dt > event_dt:
+                        break
+                    selected = candidate
+            turn_id = str(selected.get('turn_id') or task_id)
         model_key = str(event.get('model_key') or 'unknown')
         turn_usage = grouped.setdefault(turn_id, {
             'input_tokens': 0, 'cached_input_tokens': 0, 'cache_write_input_tokens': 0,
@@ -5240,9 +5688,27 @@ def _codex_finalize_mission(raw_mission, reviews):
 
     category = raw_mission.get('category') or 'other'
     category_confidence = raw_mission.get('category_confidence') or 'low'
-    if review.get('category') in CODEX_TASK_CATEGORY_KEYS:
-        category = review['category']
+    raw_categories = []
+    for raw_category in raw_mission.get('categories') or []:
+        if raw_category in CODEX_TASK_CATEGORY_KEYS and raw_category not in raw_categories:
+            raw_categories.append(raw_category)
+    if category in CODEX_TASK_CATEGORY_KEYS and category not in raw_categories:
+        raw_categories.insert(0, category)
+    review_categories = []
+    if isinstance(review.get('categories'), list):
+        for raw_category in review.get('categories') or []:
+            if raw_category in CODEX_TASK_CATEGORY_KEYS and raw_category not in review_categories:
+                review_categories.append(raw_category)
+    if review_categories:
+        categories = review_categories
+        category = categories[0]
         category_confidence = 'high'
+    elif review.get('category') in CODEX_TASK_CATEGORY_KEYS:
+        category = review['category']
+        categories = [category]
+        category_confidence = 'high'
+    else:
+        categories = raw_categories or [category]
 
     status = raw_mission.get('status') or 'unresolved'
     status_confidence = raw_mission.get('status_confidence') or 'low'
@@ -5300,14 +5766,25 @@ def _codex_finalize_mission(raw_mission, reviews):
         'title': prompt[:180] or '(Không có nội dung yêu cầu)',
         'category': category,
         'category_label': category_labels.get(category, category_labels['other']),
+        'categories': categories,
+        'category_labels': [category_labels.get(key, category_labels['other']) for key in categories],
+        'mixed_category': len(categories) > 1,
         'category_confidence': category_confidence,
         'status': status,
         'status_confidence': status_confidence,
         'accepted': accepted,
         'accepted_at': str(raw_mission.get('accepted_at') or ''),
         'reviewed': bool(review),
-        'category_reviewed': review.get('category') in CODEX_TASK_CATEGORY_KEYS,
+        'category_reviewed': bool(review_categories) or review.get('category') in CODEX_TASK_CATEGORY_KEYS,
         'outcome_reviewed': review.get('outcome') in CODEX_MISSION_OUTCOME_OVERRIDES,
+        'repair_link_mode': (
+            'manual' if isinstance(review.get('repair_of_anchor_turn_id'), str)
+            else ('none' if 'repair_of_anchor_turn_id' in review else 'auto')
+        ),
+        'repair_of_anchor_turn_id_override': (
+            str(review.get('repair_of_anchor_turn_id') or '')
+            if isinstance(review.get('repair_of_anchor_turn_id'), str) else None
+        ),
         'start_at': start_at,
         'end_at': end_at,
         'duration_minutes': duration_minutes,
@@ -5331,13 +5808,31 @@ def _codex_finalize_mission(raw_mission, reviews):
         'turn_ids': [str(turn.get('turn_id') or '') for turn in turns],
         'turns': [{
             'turn_id': str(turn.get('turn_id') or ''),
+            'usage_task_id': str(turn.get('usage_task_id') or turn.get('outer_turn_id') or turn.get('turn_id') or ''),
             'started_at': str(turn.get('started_at') or ''),
             'completed_at': str(turn.get('completed_at') or ''),
             'completed': bool(turn.get('completed')),
             'model_key': str(turn.get('model_key') or ''),
+            'category': str(turn.get('category') or category),
+            'categories': list(turn.get('categories') or [turn.get('category') or category]),
+            'category_confidence': str(turn.get('category_confidence') or 'low'),
+            'category_ambiguous': bool(turn.get('category_ambiguous')),
+            'category_inherited': bool(turn.get('category_inherited')),
             'prompt': re.sub(r'\s+', ' ', str(turn.get('user_text') or '')).strip()[:320],
             'user_tokens_est': _safe_nonnegative_int(turn.get('user_tokens_est')),
             'total_tokens': _safe_nonnegative_int((turn.get('usage') or {}).get('total_tokens')),
+            'cost_known': (turn.get('usage') or {}).get('cost_known') is not False,
+            'cost_usd': round(float((turn.get('usage') or {}).get('cost_usd') or 0.0), 6),
+            'model_totals': [
+                {
+                    'model_key': str(item.get('model_key') or 'unknown'),
+                    'total_tokens': _safe_nonnegative_int(item.get('total_tokens')),
+                    'cost_known': item.get('cost_known') is not False,
+                    'cost_usd': round(float(item.get('cost_usd') or 0.0), 6),
+                }
+                for item in ((turn.get('usage') or {}).get('models') or [])
+                if isinstance(item, dict)
+            ],
         } for turn in turns],
     }
     return mission
@@ -5348,76 +5843,1342 @@ def _is_sol_high_baseline(model_key):
     return '5.6 sol high' in clean and 'xhigh' not in clean and 'extra high' not in clean
 
 
+def _codex_mission_usable_for_matrix(mission):
+    status = str(mission.get('status') or '')
+    if status.startswith('abandoned'):
+        return False
+    if _safe_nonnegative_int(mission.get('total_tokens')) <= 0:
+        return False
+    if mission.get('has_delegated_work'):
+        return False
+
+    # A normal mixed-model route is confounded: no single model completed the
+    # objective on its own.  The one useful exception is an explicitly detected
+    # repair chain, because those tokens are attributed to the repair model and
+    # (as a penalty) to the model that produced the result being repaired.
+    if mission.get('pure_model') is False:
+        mission_id = str(mission.get('id') or '')
+        repair_of = str(mission.get('repair_of_mission_id') or '')
+        return bool(mission.get('repair_penalty_events') or (repair_of and repair_of == mission_id))
+
+    # Legacy/manual fixtures may predate the pure_model field.  Infer purity
+    # conservatively from the model evidence instead of dropping them.
+    if mission.get('pure_model') is None:
+        models = set()
+        if mission.get('model_key'):
+            models.add(str(mission.get('model_key')))
+        for item in mission.get('model_totals') or []:
+            if isinstance(item, dict) and item.get('model_key'):
+                models.add(str(item.get('model_key')))
+        for turn in mission.get('turns') or []:
+            if not isinstance(turn, dict):
+                continue
+            for model_key, tokens in _codex_turn_model_tokens(turn, mission.get('model_key')):
+                if model_key and tokens > 0:
+                    models.add(model_key)
+        if len(models) > 1:
+            return False
+    return True
+
+
+def _codex_is_repair_prompt(text):
+    clean = _codex_plain_text(text)
+    return any(token in clean for token in (
+        'chua on', 'chua dung', 'khong dung', 'van sai', 'sai roi', 'sua lai',
+        'lam lai', 'chua sua', 'van chua', 'chua duoc', 'khong on', 'fix lai',
+        'chua chinh xac', 'khong chinh xac', 'sua chua dung', 'sua chua on',
+    ))
+
+
+_CODEX_REPAIR_TOPIC_STOPWORDS = {
+    'ban', 'toi', 'minh', 'anh', 'em', 'nay', 'kia', 'do', 'day', 'roi', 'van',
+    'chua', 'khong', 'duoc', 'dung', 'sai', 'sua', 'lai', 'lam', 'giup', 'cho',
+    'thu', 'kiem', 'tra', 'tiep', 'theo', 'them', 'cai', 'cho', 'mot', 'nhieu',
+    'viec', 'task', 'model', 'prompt', 'ok', 'nhe', 'nhi', 'a', 'oi', 'va', 'la',
+    'co', 'cua', 'trong', 'tren', 'duoi', 'sau', 'truoc', 'luc', 'gio', 'nay',
+}
+
+
+def _codex_repair_topic_tokens(text):
+    clean = _codex_plain_text(text)
+    return {
+        token for token in re.findall(r'[a-z0-9_.:/-]{3,}', clean)
+        if token not in _CODEX_REPAIR_TOPIC_STOPWORDS
+    }
+
+
+def _codex_repair_link_candidates(mission, prior_missions, limit=8):
+    """Rank plausible earlier objectives without silently forcing a weak link."""
+    repair_text = ' '.join([
+        str(mission.get('title') or ''),
+        *[str(turn.get('prompt') or '') for turn in mission.get('turns') or [] if isinstance(turn, dict)],
+    ])
+    repair_tokens = _codex_repair_topic_tokens(repair_text)
+    repair_categories = set(mission.get('categories') or [mission.get('category') or 'other'])
+    repair_thread = str(mission.get('thread_id') or '')
+    ranked = []
+    for recency, candidate in enumerate(reversed(prior_missions)):
+        candidate_text = ' '.join([
+            str(candidate.get('title') or ''),
+            *[str(turn.get('prompt') or '') for turn in candidate.get('turns') or [] if isinstance(turn, dict)],
+        ])
+        candidate_tokens = _codex_repair_topic_tokens(candidate_text)
+        shared = repair_tokens & candidate_tokens
+        shared_numeric = {token for token in shared if any(char.isdigit() for char in token)}
+        same_thread = bool(repair_thread and repair_thread == str(candidate.get('thread_id') or ''))
+        category_overlap = bool(
+            repair_categories & set(candidate.get('categories') or [candidate.get('category') or 'other'])
+        )
+        # Cross-thread automatic links require distinctive shared evidence.
+        if not same_thread and len(shared) < 2 and not shared_numeric:
+            continue
+        score = (
+            (8.0 if same_thread else 0.0) +
+            (3.0 if category_overlap else 0.0) +
+            min(12.0, 3.0 * len(shared)) +
+            min(12.0, 6.0 * len(shared_numeric)) +
+            max(0.0, 2.0 - 0.08 * recency)
+        )
+        ranked.append((score, len(shared), bool(shared_numeric), recency, candidate))
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[3]))
+    result = []
+    for score, shared_count, has_numeric, _, candidate in ranked[:max(1, int(limit or 8))]:
+        result.append({
+            'mission_id': candidate.get('id'),
+            'anchor_turn_id': candidate.get('anchor_turn_id'),
+            'title': candidate.get('title'),
+            'start_at': candidate.get('start_at'),
+            'model_key': _codex_mission_primary_model(candidate),
+            'categories': list(candidate.get('categories') or [candidate.get('category') or 'other']),
+            'score': round(score, 3),
+            'shared_topic_tokens': shared_count,
+            'has_shared_identifier': has_numeric,
+            'same_thread': str(candidate.get('thread_id') or '') == repair_thread,
+        })
+    return result
+
+
+def _codex_turn_model_tokens(turn, fallback_model=None):
+    values = []
+    for item in turn.get('model_totals') or []:
+        if not isinstance(item, dict):
+            continue
+        model_key = str(item.get('model_key') or '')
+        tokens = _safe_nonnegative_int(item.get('total_tokens'))
+        if model_key and tokens > 0:
+            values.append((model_key, tokens))
+    if values:
+        return values
+    model_key = str(turn.get('model_key') or fallback_model or '')
+    tokens = _safe_nonnegative_int(turn.get('total_tokens'))
+    return [(model_key, tokens)] if model_key and tokens > 0 else []
+
+
+def _codex_mission_primary_model(mission):
+    turns = mission.get('turns') or []
+    if turns:
+        values = _codex_turn_model_tokens(turns[0], mission.get('model_key'))
+        if values:
+            return max(values, key=lambda item: item[1])[0]
+    if mission.get('model_key'):
+        return str(mission.get('model_key'))
+    totals = [item for item in mission.get('model_totals') or [] if isinstance(item, dict)]
+    if totals:
+        return str(max(totals, key=lambda item: _safe_nonnegative_int(item.get('total_tokens'))).get('model_key') or '')
+    return ''
+
+
+def _codex_apply_repair_penalties(missions):
+    for mission in missions:
+        mission['repair_of_mission_id'] = None
+        mission['repair_of_anchor_turn_id'] = None
+        mission['repair_original_model'] = None
+        mission['repair_tokens'] = 0
+        mission['repair_penalty_tokens'] = 0
+        mission['repair_penalty_applied_to_model'] = None
+        mission['repair_penalty_received_tokens'] = 0
+        mission['repair_penalty_events'] = []
+        mission['penalized_total_tokens'] = _safe_nonnegative_int(mission.get('total_tokens'))
+        mission['repair_root_mission_id'] = mission.get('id')
+        mission['repair_depth'] = 0
+        mission['repair_chain_models'] = []
+        mission['repair_link_candidates'] = []
+        mission['repair_link_confidence'] = None
+
+    ordered = sorted(
+        missions,
+        key=lambda item: (str(item.get('start_at') or ''), str(item.get('id') or '')),
+    )
+    by_anchor = {
+        str(mission.get('anchor_turn_id') or ''): mission
+        for mission in ordered if mission.get('anchor_turn_id')
+    }
+    by_id = {
+        str(mission.get('id') or ''): mission
+        for mission in ordered if mission.get('id')
+    }
+    previous_by_thread = {}
+
+    # First establish direct repair links.  Manual links can cross intervening
+    # work (and even threads); automatic non-adjacent links require distinctive
+    # topic evidence, while the immediate same-thread behavior remains the
+    # conservative fallback for short deictic prompts such as “sửa lại”.
+    for index, mission in enumerate(ordered):
+        turns = list(mission.get('turns') or [])
+        thread_key = str(mission.get('thread_id') or '')
+        previous = previous_by_thread.get(thread_key)
+        repair_source = None
+        repair_start = None
+        mode = str(mission.get('repair_link_mode') or 'auto')
+        override_anchor = str(mission.get('repair_of_anchor_turn_id_override') or '')
+        candidates = _codex_repair_link_candidates(mission, ordered[:index])
+        mission['repair_link_candidates'] = candidates
+
+        if mode == 'manual' and override_anchor:
+            repair_source = by_anchor.get(override_anchor)
+            if repair_source is not None and repair_source is not mission:
+                repair_start = 0
+                mission['repair_link_confidence'] = 'manual'
+            else:
+                repair_source = None
+        elif mode != 'none' and turns and _codex_is_repair_prompt(turns[0].get('prompt') or ''):
+            strong = next((
+                item for item in candidates
+                if item.get('shared_topic_tokens', 0) >= 1 or item.get('has_shared_identifier')
+            ), None)
+            if strong:
+                repair_source = by_id.get(str(strong.get('mission_id') or ''))
+                repair_start = 0
+                mission['repair_link_confidence'] = (
+                    'high' if strong.get('has_shared_identifier') or strong.get('shared_topic_tokens', 0) >= 2
+                    else 'medium'
+                )
+            elif previous is not None:
+                repair_source = previous
+                repair_start = 0
+                mission['repair_link_confidence'] = 'low'
+        if repair_source is None and mode != 'none' and turns:
+            for turn_index, turn in enumerate(turns[1:], start=1):
+                if _codex_is_repair_prompt(turn.get('prompt') or ''):
+                    repair_source = mission
+                    repair_start = turn_index
+                    mission['repair_link_confidence'] = 'high'
+                    break
+
+        if repair_source is None:
+            previous_by_thread[thread_key] = mission
+            continue
+        original_model = _codex_mission_primary_model(repair_source)
+        if not original_model:
+            previous_by_thread[thread_key] = mission
+            continue
+
+        model_tokens = {}
+        if turns and repair_start is not None:
+            for turn in turns[repair_start:]:
+                for model_key, tokens in _codex_turn_model_tokens(turn, mission.get('model_key')):
+                    model_tokens[model_key] = model_tokens.get(model_key, 0) + tokens
+        if not model_tokens:
+            for item in mission.get('model_totals') or []:
+                if not isinstance(item, dict):
+                    continue
+                model_key = str(item.get('model_key') or '')
+                tokens = _safe_nonnegative_int(item.get('total_tokens'))
+                if model_key and tokens > 0:
+                    model_tokens[model_key] = model_tokens.get(model_key, 0) + tokens
+        if not model_tokens and mission.get('model_key'):
+            model_tokens[str(mission.get('model_key'))] = _safe_nonnegative_int(mission.get('total_tokens'))
+
+        repair_tokens = sum(model_tokens.values())
+        penalty_tokens = sum(tokens for model_key, tokens in model_tokens.items() if model_key != original_model)
+        mission['repair_of_mission_id'] = repair_source.get('id')
+        mission['repair_of_anchor_turn_id'] = repair_source.get('anchor_turn_id')
+        mission['repair_original_model'] = original_model
+        mission['repair_tokens'] = repair_tokens
+        mission['repair_penalty_tokens'] = penalty_tokens
+        mission['repair_penalty_applied_to_model'] = original_model if penalty_tokens > 0 else None
+        mission['repair_penalty_categories'] = list(
+            repair_source.get('categories') or [repair_source.get('category') or 'other']
+        )
+        mission['_repair_model_tokens'] = dict(model_tokens)
+        previous_by_thread[thread_key] = mission
+
+    # Then propagate every later repair to each distinct model that previously
+    # failed in the chain.  A -> B -> C therefore charges C to C as real usage
+    # and as a penalty to both A and B; repeated use of the same model is only
+    # penalized once for that downstream repair.
+    for mission in ordered:
+        repair_of = str(mission.get('repair_of_mission_id') or '')
+        if not repair_of or repair_of == str(mission.get('id') or ''):
+            continue
+        direct_source = by_id.get(repair_of)
+        if direct_source is None:
+            continue
+        ancestors = []
+        seen_ids = set()
+        current = direct_source
+        while current is not None:
+            current_id = str(current.get('id') or '')
+            if not current_id or current_id in seen_ids:
+                break
+            seen_ids.add(current_id)
+            ancestors.append(current)
+            parent_id = str(current.get('repair_of_mission_id') or '')
+            current = by_id.get(parent_id) if parent_id and parent_id != current_id else None
+        root = ancestors[-1] if ancestors else direct_source
+        mission['repair_root_mission_id'] = root.get('id')
+        mission['repair_depth'] = len(ancestors)
+        chain_models = []
+        for ancestor in reversed(ancestors):
+            model_key = _codex_mission_primary_model(ancestor)
+            if model_key and (not chain_models or chain_models[-1] != model_key):
+                chain_models.append(model_key)
+        repair_models = list((mission.get('_repair_model_tokens') or {}).keys())
+        for model_key in repair_models:
+            if model_key and (not chain_models or chain_models[-1] != model_key):
+                chain_models.append(model_key)
+        mission['repair_chain_models'] = chain_models
+        root_categories = list(root.get('categories') or [root.get('category') or 'other'])
+
+        penalized_models = set()
+        for ancestor in ancestors:
+            ancestor_model = _codex_mission_primary_model(ancestor)
+            if not ancestor_model or ancestor_model in penalized_models:
+                continue
+            penalized_models.add(ancestor_model)
+            penalty = sum(
+                tokens for model_key, tokens in (mission.get('_repair_model_tokens') or {}).items()
+                if model_key != ancestor_model
+            )
+            if penalty <= 0:
+                continue
+            event = {
+                'repair_mission_id': mission.get('id'),
+                'repair_anchor_turn_id': mission.get('anchor_turn_id'),
+                'repair_model_tokens': dict(mission.get('_repair_model_tokens') or {}),
+                'penalty_tokens': penalty,
+                'applied_to_model': ancestor_model,
+                'categories': root_categories,
+                'at': mission.get('start_at'),
+                'repair_depth': mission.get('repair_depth'),
+            }
+            ancestor['repair_penalty_received_tokens'] = (
+                _safe_nonnegative_int(ancestor.get('repair_penalty_received_tokens')) + penalty
+            )
+            ancestor.setdefault('repair_penalty_events', []).append(event)
+            ancestor['penalized_total_tokens'] = (
+                _safe_nonnegative_int(ancestor.get('total_tokens')) +
+                _safe_nonnegative_int(ancestor.get('repair_penalty_received_tokens'))
+            )
+
+        direct_model = _codex_mission_primary_model(direct_source)
+        mission['repair_penalty_tokens'] = sum(
+            tokens for model_key, tokens in (mission.get('_repair_model_tokens') or {}).items()
+            if model_key != direct_model
+        )
+        mission['repair_penalty_applied_to_model'] = direct_model if mission['repair_penalty_tokens'] > 0 else None
+        mission['repair_penalty_categories'] = root_categories
+        mission.pop('_repair_model_tokens', None)
+
+
+def _codex_repair_accounting_summary(missions):
+    by_model = {}
+    raw_total = 0
+    penalty_total = 0
+    raw_quota_total = 0.0
+    penalty_quota_total = 0.0
+    quota_complete = True
+    for mission in missions or []:
+        quota_by_model = {
+            str(item.get('model_key') or ''): item
+            for item in mission.get('quota_model_totals') or []
+            if isinstance(item, dict) and item.get('model_key')
+        }
+        for item in mission.get('model_totals') or []:
+            if not isinstance(item, dict):
+                continue
+            model_key = str(item.get('model_key') or '')
+            tokens = _safe_nonnegative_int(item.get('total_tokens'))
+            if not model_key or tokens <= 0:
+                continue
+            target = by_model.setdefault(model_key, {
+                'model_key': model_key,
+                'raw_tokens': 0,
+                'repair_penalty_tokens': 0,
+                'effective_tokens': 0,
+                'raw_quota_pct_5h': 0.0,
+                'repair_penalty_quota_pct_5h': 0.0,
+                'effective_quota_pct_5h': None,
+                'quota_known': True,
+            })
+            target['raw_tokens'] += tokens
+            raw_total += tokens
+            quota_item = quota_by_model.get(model_key)
+            if quota_item and quota_item.get('quota_known'):
+                quota_value = float(quota_item.get('quota_pct_5h') or 0.0)
+                target['raw_quota_pct_5h'] += quota_value
+                raw_quota_total += quota_value
+            else:
+                target['quota_known'] = False
+                quota_complete = False
+
+        for event in mission.get('repair_penalty_events') or []:
+            if not isinstance(event, dict):
+                continue
+            original_model = str(event.get('applied_to_model') or '')
+            penalty = _safe_nonnegative_int(event.get('penalty_tokens'))
+            if not original_model or penalty <= 0:
+                continue
+            target = by_model.setdefault(original_model, {
+                'model_key': original_model,
+                'raw_tokens': 0,
+                'repair_penalty_tokens': 0,
+                'effective_tokens': 0,
+                'raw_quota_pct_5h': 0.0,
+                'repair_penalty_quota_pct_5h': 0.0,
+                'effective_quota_pct_5h': None,
+                'quota_known': True,
+            })
+            target['repair_penalty_tokens'] += penalty
+            penalty_total += penalty
+            if event.get('quota_known') and event.get('penalty_quota_pct_5h') is not None:
+                penalty_quota = float(event.get('penalty_quota_pct_5h') or 0.0)
+                target['repair_penalty_quota_pct_5h'] += penalty_quota
+                penalty_quota_total += penalty_quota
+            else:
+                target['quota_known'] = False
+                quota_complete = False
+
+    rows = []
+    for target in by_model.values():
+        target['effective_tokens'] = target['raw_tokens'] + target['repair_penalty_tokens']
+        if target.get('quota_known'):
+            target['raw_quota_pct_5h'] = round(target['raw_quota_pct_5h'], 6)
+            target['repair_penalty_quota_pct_5h'] = round(target['repair_penalty_quota_pct_5h'], 6)
+            target['effective_quota_pct_5h'] = round(
+                target['raw_quota_pct_5h'] + target['repair_penalty_quota_pct_5h'], 6
+            )
+        rows.append(target)
+    rows.sort(key=lambda item: (-item['effective_tokens'], item['model_key']))
+    return {
+        'raw_tokens': raw_total,
+        'repair_penalty_tokens': penalty_total,
+        'effective_tokens': raw_total + penalty_total,
+        'raw_quota_pct_5h': round(raw_quota_total, 6) if quota_complete else None,
+        'repair_penalty_quota_pct_5h': round(penalty_quota_total, 6) if quota_complete else None,
+        'effective_quota_pct_5h': (
+            round(raw_quota_total + penalty_quota_total, 6) if quota_complete else None
+        ),
+        'quota_known': quota_complete,
+        'by_model': rows,
+    }
+
+
+def _codex_apply_mission_quota_estimates(missions, quota_efficiency=None, quota_task_samples=None):
+    """Attach empirical 5-hour quota burn to each model contribution.
+
+    A validated same-task quota delta is used first and distributed across
+    logical turns by token share.  Otherwise the model's measured
+    tokens-per-1%-quota rate is used.  Missing calibration stays unavailable;
+    it is never silently replaced by a universal token conversion.
+    """
+    rates = {}
+    for row in (quota_efficiency or {}).get('models') or []:
+        if not isinstance(row, dict):
+            continue
+        model_key = str(row.get('model_key') or '')
+        try:
+            tokens_per_pct = float(row.get('tokens_per_quota_pct') or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            tokens_per_pct = 0.0
+        if model_key and math.isfinite(tokens_per_pct) and tokens_per_pct > 0:
+            rates[model_key] = {
+                'tokens_per_quota_pct': tokens_per_pct,
+                'confidence': str(row.get('confidence') or 'low'),
+                'sample_count': _safe_nonnegative_int(row.get('sample_count')),
+            }
+
+    direct_by_task = {}
+    for sample in quota_task_samples or []:
+        if not isinstance(sample, dict):
+            continue
+        task_id = str(sample.get('task_id') or '')
+        try:
+            quota_pct = float(sample.get('estimated_quota_delta_pct') or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            quota_pct = 0.0
+        if task_id and math.isfinite(quota_pct) and quota_pct > 0:
+            direct_by_task[task_id] = sample
+
+    task_model_tokens = {}
+    for mission in missions or []:
+        for turn in mission.get('turns') or []:
+            if not isinstance(turn, dict):
+                continue
+            task_id = str(turn.get('usage_task_id') or turn.get('turn_id') or '')
+            for model_key, tokens in _codex_turn_model_tokens(turn, mission.get('model_key')):
+                task_model_tokens[(task_id, model_key)] = task_model_tokens.get((task_id, model_key), 0) + tokens
+
+    confidence_rank = {'low': 0, 'medium': 1, 'high': 2}
+    mission_by_id = {str(m.get('id') or ''): m for m in missions or [] if m.get('id')}
+    for mission in missions or []:
+        mission_models = {}
+        mission_sources = set()
+        mission_confidences = []
+        all_known = True
+        had_contribution = False
+        for turn in mission.get('turns') or []:
+            if not isinstance(turn, dict):
+                continue
+            task_id = str(turn.get('usage_task_id') or turn.get('turn_id') or '')
+            turn_quota = 0.0
+            turn_known = True
+            turn_had_contribution = False
+            turn_sources = set()
+            model_totals = [item for item in turn.get('model_totals') or [] if isinstance(item, dict)]
+            if not model_totals:
+                model_totals = [
+                    {'model_key': model_key, 'total_tokens': tokens}
+                    for model_key, tokens in _codex_turn_model_tokens(turn, mission.get('model_key'))
+                ]
+                turn['model_totals'] = model_totals
+            for model_usage in model_totals:
+                model_key = str(model_usage.get('model_key') or '')
+                tokens = _safe_nonnegative_int(model_usage.get('total_tokens'))
+                if not model_key or tokens <= 0:
+                    continue
+                had_contribution = True
+                turn_had_contribution = True
+                quota_pct = None
+                source = 'unavailable'
+                confidence = 'low'
+                direct = direct_by_task.get(task_id)
+                if direct and str(direct.get('model_key') or '') == model_key:
+                    denominator = task_model_tokens.get((task_id, model_key), 0)
+                    try:
+                        direct_total = float(direct.get('estimated_quota_delta_pct') or 0.0)
+                    except (TypeError, ValueError, OverflowError):
+                        direct_total = 0.0
+                    if denominator > 0 and direct_total > 0:
+                        quota_pct = direct_total * tokens / denominator
+                        source = 'direct_task'
+                        coverage = float(direct.get('token_coverage') or 0.0)
+                        confidence = 'high' if coverage >= 0.75 else ('medium' if coverage >= 0.5 else 'low')
+                if quota_pct is None and model_key in rates:
+                    quota_pct = tokens / rates[model_key]['tokens_per_quota_pct']
+                    source = 'calibrated_model'
+                    confidence = rates[model_key]['confidence']
+                known = quota_pct is not None and math.isfinite(quota_pct) and quota_pct >= 0
+                model_usage['quota_known'] = known
+                model_usage['quota_pct_5h'] = round(quota_pct, 6) if known else None
+                model_usage['quota_source'] = source
+                model_usage['quota_confidence'] = confidence if known else 'low'
+                target = mission_models.setdefault(model_key, {
+                    'model_key': model_key,
+                    'total_tokens': 0,
+                    'quota_pct_5h': 0.0,
+                    'quota_known': True,
+                    'quota_sources': set(),
+                    'quota_confidences': [],
+                })
+                target['total_tokens'] += tokens
+                target['quota_known'] = bool(target['quota_known']) and known
+                if known:
+                    target['quota_pct_5h'] += quota_pct
+                    target['quota_sources'].add(source)
+                    target['quota_confidences'].append(confidence)
+                    turn_quota += quota_pct
+                    turn_sources.add(source)
+                    mission_sources.add(source)
+                    mission_confidences.append(confidence)
+                else:
+                    turn_known = False
+                    all_known = False
+            turn['quota_known'] = bool(turn_known and turn_had_contribution)
+            turn['quota_pct_5h'] = round(turn_quota, 6) if turn['quota_known'] else None
+            turn['quota_sources'] = sorted(turn_sources)
+
+        # Legacy/manual fixtures may not contain turn details.
+        if not mission_models:
+            for model_usage in mission.get('model_totals') or []:
+                if not isinstance(model_usage, dict):
+                    continue
+                model_key = str(model_usage.get('model_key') or '')
+                tokens = _safe_nonnegative_int(model_usage.get('total_tokens'))
+                rate = rates.get(model_key)
+                known = bool(rate and tokens > 0)
+                quota_pct = tokens / rate['tokens_per_quota_pct'] if known else None
+                if tokens > 0:
+                    had_contribution = True
+                mission_models[model_key] = {
+                    'model_key': model_key,
+                    'total_tokens': tokens,
+                    'quota_pct_5h': quota_pct or 0.0,
+                    'quota_known': known,
+                    'quota_sources': {'calibrated_model'} if known else set(),
+                    'quota_confidences': [rate['confidence']] if known else [],
+                }
+                if known:
+                    mission_sources.add('calibrated_model')
+                    mission_confidences.append(rate['confidence'])
+                else:
+                    all_known = False
+
+        quota_model_totals = []
+        for target in mission_models.values():
+            confidences = target.pop('quota_confidences')
+            sources = target.pop('quota_sources')
+            target['quota_pct_5h'] = round(target['quota_pct_5h'], 6) if target['quota_known'] else None
+            target['quota_sources'] = sorted(sources)
+            target['quota_confidence'] = min(
+                confidences or ['low'], key=lambda value: confidence_rank.get(value, 0)
+            )
+            quota_model_totals.append(target)
+        quota_model_totals.sort(key=lambda item: -_safe_nonnegative_int(item.get('total_tokens')))
+        mission['quota_model_totals'] = quota_model_totals
+        mission['quota_known'] = bool(had_contribution and all_known and quota_model_totals)
+        mission['quota_pct_5h'] = (
+            round(sum(float(item.get('quota_pct_5h') or 0.0) for item in quota_model_totals), 6)
+            if mission['quota_known'] else None
+        )
+        mission['quota_sources'] = sorted(mission_sources)
+        mission['quota_confidence'] = min(
+            mission_confidences or ['low'], key=lambda value: confidence_rank.get(value, 0)
+        )
+        mission['repair_penalty_received_quota_pct_5h'] = 0.0
+        mission['penalized_quota_pct_5h'] = mission.get('quota_pct_5h')
+
+    # Convert the already-built cumulative repair events to quota using the
+    # repair mission's own model-specific quota estimates.
+    for source in missions or []:
+        for event in source.get('repair_penalty_events') or []:
+            if not isinstance(event, dict):
+                continue
+            repair = mission_by_id.get(str(event.get('repair_mission_id') or ''))
+            applied_model = str(event.get('applied_to_model') or '')
+            repair_quota = {}
+            repair_known = True
+            if repair is None:
+                repair_known = False
+            else:
+                for item in repair.get('quota_model_totals') or []:
+                    model_key = str(item.get('model_key') or '')
+                    if not model_key or model_key == applied_model:
+                        continue
+                    if not item.get('quota_known'):
+                        repair_known = False
+                        continue
+                    repair_quota[model_key] = float(item.get('quota_pct_5h') or 0.0)
+            penalty_quota = sum(repair_quota.values()) if repair_known else None
+            event['repair_model_quota_pct_5h'] = repair_quota
+            event['quota_known'] = repair_known
+            event['penalty_quota_pct_5h'] = round(penalty_quota, 6) if penalty_quota is not None else None
+            if penalty_quota is not None:
+                source['repair_penalty_received_quota_pct_5h'] = round(
+                    float(source.get('repair_penalty_received_quota_pct_5h') or 0.0) + penalty_quota,
+                    6,
+                )
+        if source.get('quota_known'):
+            source['penalized_quota_pct_5h'] = round(
+                float(source.get('quota_pct_5h') or 0.0) +
+                float(source.get('repair_penalty_received_quota_pct_5h') or 0.0),
+                6,
+            )
+
+
+def _codex_collect_review_cases(missions):
+    cases = []
+    for mission in missions or []:
+        reasons = []
+        hard_turns = []
+        if mission.get('category') == 'other':
+            reasons.append('other_category')
+        if str(mission.get('category_confidence') or 'low') == 'low':
+            reasons.append('low_category_confidence')
+        turns = mission.get('turns') or []
+        if not turns:
+            reasons.append('legacy_no_turn_detail')
+        for index, turn in enumerate(turns):
+            turn_reasons = []
+            # A tied score between multiple explicit task categories is not, by
+            # itself, a review problem.  Multi-label classification is an
+            # intentional output and the matrix can attribute the turn across
+            # those categories without forcing a human to choose one winner.
+            # Keep category_ambiguous on the turn as provenance, but reserve the
+            # review queue for genuinely weak/unknown classifications.
+            if str(turn.get('category_confidence') or 'low') == 'low':
+                turn_reasons.append('low_confidence')
+            if turn.get('category') == 'other':
+                turn_reasons.append('other_category')
+            if turn_reasons:
+                hard_turns.append({
+                    'turn_id': turn.get('turn_id'),
+                    'turn_index': index,
+                    'categories': list(turn.get('categories') or []),
+                    'reasons': turn_reasons,
+                    'prompt': turn.get('prompt') or '',
+                })
+        if hard_turns:
+            reasons.append('hard_turns')
+        if (mission.get('repair_of_mission_id') and
+                mission.get('repair_link_mode') == 'auto' and
+                mission.get('repair_link_confidence') == 'low'):
+            reasons.append('low_repair_link_confidence')
+        reasons = list(dict.fromkeys(reasons))
+        mission['needs_category_review'] = bool(reasons)
+        mission['needs_review'] = bool(reasons)
+        mission['category_review_reasons'] = reasons
+        if reasons:
+            cases.append({
+                'mission_id': mission.get('id'),
+                'anchor_turn_id': mission.get('anchor_turn_id'),
+                'title': mission.get('title'),
+                'category': mission.get('category'),
+                'categories': list(mission.get('categories') or []),
+                'category_confidence': mission.get('category_confidence'),
+                'reasons': reasons,
+                'hard_turns': hard_turns,
+            })
+    return cases
+
+
+def _codex_matrix_attributed_samples(missions):
+    usable = [mission for mission in missions if _codex_mission_usable_for_matrix(mission)]
+    synthetic_ids = {
+        id(mission): f'legacy-mission-{index}'
+        for index, mission in enumerate(missions)
+    }
+
+    def mission_identity(mission):
+        return str(
+            mission.get('id') or mission.get('anchor_turn_id') or synthetic_ids[id(mission)]
+        )
+
+    mission_by_id = {
+        mission_identity(mission): mission for mission in missions
+    }
+    attributed = {}
+
+    def mission_categories(mission):
+        return list(dict.fromkeys(
+            key for key in (mission.get('categories') or [mission.get('category') or 'other'])
+            if key in CODEX_TASK_CATEGORY_KEYS
+        )) or ['other']
+
+    def attribution_root(mission):
+        current = mission
+        seen = set()
+        while current is not None:
+            current_id = mission_identity(current)
+            if current_id in seen:
+                break
+            seen.add(current_id)
+            repair_of = str(current.get('repair_of_mission_id') or '')
+            if not repair_of or repair_of == current_id or repair_of not in mission_by_id:
+                break
+            current = mission_by_id[repair_of]
+        return current or mission
+
+    def add_contribution(root, category, model_key, raw_tokens=0.0, cost_usd=0.0,
+                         cost_known=True, repair_penalty_tokens=0.0,
+                         raw_quota_pct_5h=None, quota_known=False,
+                         quota_source=None, repair_penalty_quota_pct_5h=None,
+                         category_split=False, repair_attributed=False):
+        if category not in CODEX_TASK_CATEGORY_KEYS or not model_key:
+            return
+        tokens = float(raw_tokens or 0.0)
+        penalty = float(repair_penalty_tokens or 0.0)
+        quota_penalty = (
+            float(repair_penalty_quota_pct_5h)
+            if repair_penalty_quota_pct_5h is not None else None
+        )
+        if tokens <= 0 and penalty <= 0 and not (quota_penalty and quota_penalty > 0):
+            return
+        root_id = mission_identity(root)
+        key = (root_id, category, model_key)
+        sample = attributed.setdefault(key, {
+            'mission_id': root_id,
+            'anchor_turn_id': root.get('anchor_turn_id'),
+            'category': category,
+            'model_key': model_key,
+            'raw_total_tokens': 0.0,
+            'repair_penalty_tokens': 0.0,
+            'total_tokens': 0.0,
+            'raw_quota_pct_5h': 0.0,
+            'repair_penalty_quota_pct_5h': 0.0,
+            'total_quota_pct_5h': 0.0,
+            'quota_known': True,
+            'quota_sources': [],
+            'cost_known': True,
+            'cost_usd': 0.0,
+            'correction_turns': root.get('correction_turns', 0),
+            'added_guidance_tokens_est': root.get('added_guidance_tokens_est', 0),
+            'first_pass_success': root.get('first_pass_success', False),
+            'status': root.get('status'),
+            'accepted': root.get('accepted', False),
+            # "Unconfirmed" and "needs review" are deliberately separate.
+            # An unresolved mission is still a usable matrix sample, with
+            # lower confidence, but it should only count as pending review
+            # when the review classifier found a concrete reason.
+            'unconfirmed': not bool(root.get('accepted')),
+            'pending_review': bool(
+                root.get('needs_review') or root.get('needs_category_review')
+            ),
+            'category_split': False,
+            'repair_attributed': False,
+            'start_at': root.get('start_at'),
+        })
+        sample['raw_total_tokens'] += tokens
+        sample['repair_penalty_tokens'] += penalty
+        sample['total_tokens'] = sample['raw_total_tokens'] + sample['repair_penalty_tokens']
+        if raw_quota_pct_5h is not None:
+            sample['raw_quota_pct_5h'] += float(raw_quota_pct_5h)
+        if quota_penalty is not None:
+            sample['repair_penalty_quota_pct_5h'] += quota_penalty
+        sample['total_quota_pct_5h'] = (
+            sample['raw_quota_pct_5h'] + sample['repair_penalty_quota_pct_5h']
+        )
+        sample['quota_known'] = bool(sample['quota_known']) and bool(quota_known)
+        if quota_source and quota_source not in sample['quota_sources']:
+            sample['quota_sources'].append(quota_source)
+        sample['cost_usd'] += float(cost_usd or 0.0)
+        sample['cost_known'] = bool(sample['cost_known']) and bool(cost_known)
+        sample['category_split'] = bool(sample['category_split'] or category_split)
+        sample['repair_attributed'] = bool(sample['repair_attributed'] or repair_attributed or penalty > 0)
+        if sample['repair_attributed']:
+            sample['first_pass_success'] = False
+            sample['correction_turns'] = max(1, _safe_nonnegative_int(sample.get('correction_turns')))
+
+    for mission in usable:
+        root = attribution_root(mission)
+        base_categories = mission_categories(mission)
+        repair_of = str(mission.get('repair_of_mission_id') or '')
+        mission_id = mission_identity(mission)
+        separate_repair = bool(repair_of and repair_of != mission_id and repair_of in mission_by_id)
+        if separate_repair:
+            repair_categories = [
+                key for key in (mission.get('repair_penalty_categories') or mission_categories(root))
+                if key in CODEX_TASK_CATEGORY_KEYS
+            ]
+            base_categories = list(dict.fromkeys(repair_categories)) or mission_categories(root)
+        category_reviewed = bool(mission.get('category_reviewed')) and not separate_repair
+        contribution_count = 0
+
+        for turn in mission.get('turns') or []:
+            if not isinstance(turn, dict):
+                continue
+            turn_tokens = _safe_nonnegative_int(turn.get('total_tokens'))
+            if turn_tokens <= 0:
+                continue
+            if separate_repair:
+                categories = list(base_categories)
+            else:
+                turn_categories = [
+                    key for key in (turn.get('categories') or [turn.get('category') or base_categories[0]])
+                    if key in CODEX_TASK_CATEGORY_KEYS
+                ]
+                if category_reviewed:
+                    selected = [key for key in turn_categories if key in base_categories]
+                    categories = selected or list(base_categories)
+                else:
+                    categories = turn_categories or list(base_categories)
+            categories = list(dict.fromkeys(categories)) or ['other']
+            category_weight = 1.0 / len(categories)
+            model_totals = [
+                item for item in (turn.get('model_totals') or [])
+                if isinstance(item, dict) and _safe_nonnegative_int(item.get('total_tokens')) > 0
+            ]
+            if not model_totals:
+                fallback_model = str(turn.get('model_key') or mission.get('model_key') or '')
+                if fallback_model:
+                    model_totals = [{
+                        'model_key': fallback_model,
+                        'total_tokens': turn_tokens,
+                        'cost_known': turn.get('cost_known') is not False,
+                        'cost_usd': float(turn.get('cost_usd') or 0.0),
+                    }]
+            for model_usage in model_totals:
+                model_key = str(model_usage.get('model_key') or '')
+                model_tokens = _safe_nonnegative_int(model_usage.get('total_tokens'))
+                if not model_key or model_tokens <= 0:
+                    continue
+                model_cost = float(model_usage.get('cost_usd') or 0.0)
+                model_quota = model_usage.get('quota_pct_5h')
+                model_quota_known = bool(model_usage.get('quota_known'))
+                for category in categories:
+                    add_contribution(
+                        root, category, model_key,
+                        raw_tokens=model_tokens * category_weight,
+                        cost_usd=model_cost * category_weight,
+                        cost_known=model_usage.get('cost_known') is not False,
+                        raw_quota_pct_5h=(
+                            float(model_quota) * category_weight
+                            if model_quota_known and model_quota is not None else None
+                        ),
+                        quota_known=model_quota_known,
+                        quota_source=model_usage.get('quota_source'),
+                        category_split=len(categories) > 1,
+                        repair_attributed=separate_repair,
+                    )
+                    contribution_count += 1
+
+        # Legacy/manual mission fixtures may not contain turn detail.
+        if contribution_count == 0:
+            category_weight = 1.0 / len(base_categories)
+            model_totals = [
+                item for item in (mission.get('quota_model_totals') or mission.get('model_totals') or [])
+                if isinstance(item, dict) and _safe_nonnegative_int(item.get('total_tokens')) > 0
+            ]
+            if not model_totals and mission.get('model_key'):
+                model_totals = [{
+                    'model_key': mission.get('model_key'),
+                    'total_tokens': _safe_nonnegative_int(mission.get('total_tokens')),
+                    'cost_known': mission.get('cost_known') is not False,
+                    'cost_usd': float(mission.get('cost_usd') or 0.0),
+                }]
+            for model_usage in model_totals:
+                model_key = str(model_usage.get('model_key') or '')
+                model_tokens = _safe_nonnegative_int(model_usage.get('total_tokens'))
+                if not model_key or model_tokens <= 0:
+                    continue
+                model_cost = float(model_usage.get('cost_usd') or 0.0)
+                model_quota = model_usage.get('quota_pct_5h')
+                model_quota_known = bool(model_usage.get('quota_known'))
+                for category in base_categories:
+                    add_contribution(
+                        root, category, model_key,
+                        raw_tokens=model_tokens * category_weight,
+                        cost_usd=model_cost * category_weight,
+                        cost_known=model_usage.get('cost_known') is not False,
+                        raw_quota_pct_5h=(
+                            float(model_quota) * category_weight
+                            if model_quota_known and model_quota is not None else None
+                        ),
+                        quota_known=model_quota_known,
+                        quota_source=(model_usage.get('quota_sources') or ['calibrated_model'])[0]
+                        if model_quota_known else None,
+                        category_split=len(base_categories) > 1,
+                        repair_attributed=separate_repair,
+                    )
+
+    # A cross-model repair is real usage for the new model and an explicit
+    # penalty for the model whose output had to be repaired.  Add that penalty
+    # to the same completed-objective sample; do not create an extra sample.
+    for source in usable:
+        root = attribution_root(source)
+        for event in source.get('repair_penalty_events') or []:
+            if not isinstance(event, dict):
+                continue
+            model_key = str(event.get('applied_to_model') or '')
+            penalty = _safe_nonnegative_int(event.get('penalty_tokens'))
+            penalty_quota = event.get('penalty_quota_pct_5h')
+            penalty_quota_known = bool(event.get('quota_known'))
+            categories = [
+                key for key in (event.get('categories') or mission_categories(root))
+                if key in CODEX_TASK_CATEGORY_KEYS
+            ]
+            categories = list(dict.fromkeys(categories)) or mission_categories(root)
+            category_weight = 1.0 / len(categories)
+            for category in categories:
+                add_contribution(
+                    root, category, model_key,
+                    repair_penalty_tokens=penalty * category_weight,
+                    repair_penalty_quota_pct_5h=(
+                        float(penalty_quota) * category_weight
+                        if penalty_quota_known and penalty_quota is not None else None
+                    ),
+                    quota_known=penalty_quota_known,
+                    quota_source='repair_chain',
+                    cost_known=False,
+                    category_split=len(categories) > 1,
+                    repair_attributed=True,
+                )
+
+    return sorted(
+        attributed.values(),
+        key=lambda item: (str(item.get('start_at') or ''), item['mission_id'], item['category'], item['model_key']),
+    )
+
+
 def _codex_task_matrix(missions, range_days, now_utc):
     cutoff = None if range_days is None else now_utc - timedelta(days=range_days)
+    bridge_missions = [mission for mission in missions if _codex_mission_usable_for_matrix(mission)]
+    bridge_eligible = _codex_matrix_attributed_samples(bridge_missions)
     eligible = []
-    for mission in missions:
-        if not mission.get('accepted') or not mission.get('pure_model') or mission.get('total_tokens', 0) <= 0:
-            continue
-        started = _parse_iso_utc(mission.get('start_at'))
+    for sample in bridge_eligible:
+        started = _parse_iso_utc(sample.get('start_at'))
         if cutoff is not None and (started is None or started < cutoff):
             continue
-        eligible.append(mission)
+        eligible.append(sample)
+    eligible_mission_ids = {
+        sample.get('mission_id') for sample in eligible if sample.get('mission_id')
+    }
 
     by_cell = {}
     model_counts = {}
-    for mission in eligible:
-        key = (mission.get('category') or 'other', mission.get('model_key'))
-        by_cell.setdefault(key, []).append(mission)
-        model_counts[mission['model_key']] = model_counts.get(mission['model_key'], 0) + 1
+    for sample in eligible:
+        key = (sample.get('category') or 'other', sample.get('model_key'))
+        by_cell.setdefault(key, []).append(sample)
+        model_key = sample.get('model_key')
+        if model_key:
+            model_counts[model_key] = model_counts.get(model_key, 0) + 1
+    historical_by_cell = {}
+    for sample in bridge_eligible:
+        key = (sample.get('category') or 'other', sample.get('model_key'))
+        historical_by_cell.setdefault(key, []).append(sample)
     models = sorted(model_counts, key=lambda model: (0 if _is_sol_high_baseline(model) else 1,
                                                      -model_counts[model], model))
+    historical_models = sorted({
+        sample.get('model_key') for sample in bridge_eligible if sample.get('model_key')
+    })
     baseline_model = next((model for model in models if _is_sol_high_baseline(model)), None)
+    if baseline_model is None:
+        baseline_model = next((model for model in historical_models if _is_sol_high_baseline(model)), None)
+        if baseline_model:
+            models = [baseline_model] + [model for model in models if model != baseline_model]
+
+    bridge_contexts = {}
+    for category in CODEX_TASK_CATEGORIES:
+        category_key = category['key']
+        values = {}
+        for model in historical_models:
+            samples = historical_by_cell.get((category_key, model), [])
+            if len(samples) < 3:
+                continue
+            median_tokens = _median_numeric(item.get('total_tokens') for item in samples)
+            if median_tokens and median_tokens > 0:
+                values[model] = median_tokens
+        if len(values) >= 2:
+            bridge_contexts[category_key] = values
+    bridge_graph = _codex_ratio_bridge_graph(bridge_contexts)
+    quota_bridge_contexts = {}
+    for category in CODEX_TASK_CATEGORIES:
+        category_key = category['key']
+        values = {}
+        for model in historical_models:
+            quota_samples = [
+                item for item in historical_by_cell.get((category_key, model), [])
+                if item.get('quota_known') and float(item.get('total_quota_pct_5h') or 0.0) > 0
+            ]
+            if len(quota_samples) < 3:
+                continue
+            median_quota = _median_numeric(item.get('total_quota_pct_5h') for item in quota_samples)
+            if median_quota and median_quota > 0:
+                values[model] = median_quota
+        if len(values) >= 2:
+            quota_bridge_contexts[category_key] = values
+    quota_bridge_graph = _codex_ratio_bridge_graph(quota_bridge_contexts)
+    if models and bridge_graph:
+        current_models = list(models)
+        historical_counts = {}
+        for sample in bridge_eligible:
+            model_key = sample.get('model_key')
+            if model_key:
+                historical_counts[model_key] = historical_counts.get(model_key, 0) + 1
+        connected_historical = []
+        for candidate in historical_models:
+            if candidate in models:
+                continue
+            if any(
+                _codex_find_bridge_ratio(bridge_graph, anchor, candidate)
+                for anchor in current_models if anchor != candidate
+            ):
+                connected_historical.append(candidate)
+        connected_historical.sort(key=lambda model: (-historical_counts.get(model, 0), model))
+        models.extend(connected_historical)
     rows = []
     for category in CODEX_TASK_CATEGORIES:
         category_key = category['key']
+        direct_values = {}
+        observed_values = {}
+        quota_direct_values = {}
+        quota_observed_values = {}
+        for model in models:
+            direct_samples = by_cell.get((category_key, model), [])
+            direct_median = _median_numeric(item.get('total_tokens') for item in direct_samples)
+            if direct_samples and direct_median and direct_median > 0:
+                observed_values[model] = direct_median
+            if len(direct_samples) >= 3 and direct_median and direct_median > 0:
+                direct_values[model] = direct_median
+            known_quota_samples = [
+                item for item in direct_samples
+                if item.get('quota_known') and float(item.get('total_quota_pct_5h') or 0.0) > 0
+            ]
+            quota_median = _median_numeric(item.get('total_quota_pct_5h') for item in known_quota_samples)
+            if known_quota_samples and quota_median and quota_median > 0:
+                quota_observed_values[model] = quota_median
+            if len(known_quota_samples) >= 3 and quota_median and quota_median > 0:
+                quota_direct_values[model] = quota_median
+
         baseline_samples = by_cell.get((category_key, baseline_model), []) if baseline_model else []
-        baseline_median = _median_numeric([item['total_tokens'] for item in baseline_samples])
-        baseline_ready = len(baseline_samples) >= 3 and baseline_median and baseline_median > 0
+        baseline_median = direct_values.get(baseline_model) if baseline_model else None
+        baseline_source = 'direct' if baseline_median and baseline_median > 0 else 'unavailable'
+        baseline_estimate = None
+        if baseline_model and baseline_source != 'direct' and (direct_values or observed_values):
+            baseline_estimate = _codex_estimate_baseline_from_anchors(
+                direct_values, bridge_graph, baseline_model
+            )
+            if baseline_estimate is None and observed_values:
+                baseline_estimate = _codex_estimate_baseline_from_anchors(
+                    observed_values, bridge_graph, baseline_model
+                )
+            if baseline_estimate:
+                baseline_anchor = ((baseline_estimate.get('representative') or {}).get('anchor_model'))
+                baseline_anchor_count = len(by_cell.get((category_key, baseline_anchor), [])) if baseline_anchor else 0
+                baseline_estimate['anchor_sample_count'] = baseline_anchor_count
+                if baseline_anchor_count < 3:
+                    baseline_estimate['confidence'] = 'low'
+            if baseline_estimate and baseline_estimate.get('value', 0) > 0:
+                baseline_median = float(baseline_estimate['value'])
+                baseline_source = 'bridge'
+        baseline_quota_samples = [
+            item for item in by_cell.get((category_key, baseline_model), [])
+            if item.get('quota_known') and float(item.get('total_quota_pct_5h') or 0.0) > 0
+        ] if baseline_model else []
+        baseline_quota_median = quota_direct_values.get(baseline_model) if baseline_model else None
+        baseline_quota_source = 'direct' if baseline_quota_median and baseline_quota_median > 0 else 'unavailable'
+        if baseline_model and baseline_quota_source == 'unavailable':
+            sparse_baseline_quota = quota_observed_values.get(baseline_model)
+            if sparse_baseline_quota and sparse_baseline_quota > 0:
+                baseline_quota_median = sparse_baseline_quota
+                baseline_quota_source = 'sparse_direct'
+        baseline_quota_estimate = None
+        if (baseline_model and baseline_quota_source == 'unavailable' and
+                (quota_direct_values or quota_observed_values)):
+            baseline_quota_estimate = _codex_estimate_baseline_from_anchors(
+                quota_direct_values, quota_bridge_graph, baseline_model
+            )
+            if baseline_quota_estimate is None and quota_observed_values:
+                baseline_quota_estimate = _codex_estimate_baseline_from_anchors(
+                    quota_observed_values, quota_bridge_graph, baseline_model
+                )
+            if baseline_quota_estimate and baseline_quota_estimate.get('value', 0) > 0:
+                baseline_quota_median = float(baseline_quota_estimate['value'])
+                baseline_quota_source = 'bridge'
         cells = {}
         for model in models:
             samples = by_cell.get((category_key, model), [])
             count = len(samples)
-            if count == 0:
-                cells[model] = {'sample_status': 'no_data', 'sample_count': 0}
-                continue
+            mission_count = len({item.get('mission_id') for item in samples if item.get('mission_id')})
+            pending_count = sum(1 for item in samples if item.get('pending_review'))
+            unconfirmed_count = sum(1 for item in samples if item.get('unconfirmed'))
+            split_count = sum(1 for item in samples if item.get('category_split'))
+            repair_count = sum(1 for item in samples if item.get('repair_attributed'))
             median_tokens = _median_numeric([item['total_tokens'] for item in samples])
-            median_cost = _median_numeric([item['cost_usd'] for item in samples if item.get('cost_known')])
+            median_raw_tokens = _median_numeric([item.get('raw_total_tokens') for item in samples])
+            median_repair_penalty = _median_numeric([item.get('repair_penalty_tokens') for item in samples])
+            quota_samples = [
+                item for item in samples
+                if item.get('quota_known') and float(item.get('total_quota_pct_5h') or 0.0) > 0
+            ]
+            quota_count = len(quota_samples)
+            median_quota = _median_numeric(item.get('total_quota_pct_5h') for item in quota_samples)
+            median_raw_quota = _median_numeric(item.get('raw_quota_pct_5h') for item in quota_samples)
+            median_repair_penalty_quota = _median_numeric(
+                item.get('repair_penalty_quota_pct_5h') for item in quota_samples
+            )
+            known_costs = [item['cost_usd'] for item in samples if item.get('cost_known')]
+            median_cost = _median_numeric(known_costs) if len(known_costs) == count else None
             median_corrections = _median_numeric([item['correction_turns'] for item in samples])
             median_guidance = _median_numeric([item['added_guidance_tokens_est'] for item in samples])
-            first_pass_pct = 100.0 * sum(1 for item in samples if item.get('first_pass_success')) / count
-            explicit_pct = 100.0 * sum(1 for item in samples if item.get('status') in ('accepted_explicit', 'accepted_manual')) / count
-            if count < 3:
-                sample_status = 'insufficient'
-            elif not baseline_ready:
-                sample_status = 'no_baseline'
+            first_pass_pct = (100.0 * sum(1 for item in samples if item.get('first_pass_success')) / count) if count else 0.0
+            explicit_pct = (100.0 * sum(1 for item in samples if item.get('status') in ('accepted_explicit', 'accepted_manual')) / count) if count else 0.0
+            direct_ready = count >= 3 and median_tokens and median_tokens > 0
+            sparse_direct = bool(count and median_tokens and median_tokens > 0 and not direct_ready)
+            estimate = None
+            estimated_tokens = None
+            if not direct_ready and not sparse_direct and (direct_values or observed_values):
+                estimate = _codex_estimate_baseline_from_anchors(
+                    direct_values, bridge_graph, model, prefer_excluding=model
+                )
+                if estimate is None and observed_values:
+                    estimate = _codex_estimate_baseline_from_anchors(
+                        observed_values, bridge_graph, model, prefer_excluding=model
+                    )
+                if estimate:
+                    estimate_anchor = ((estimate.get('representative') or {}).get('anchor_model'))
+                    estimate_anchor_count = len(by_cell.get((category_key, estimate_anchor), [])) if estimate_anchor else 0
+                    estimate['anchor_sample_count'] = estimate_anchor_count
+                    if estimate_anchor_count < 3:
+                        estimate['confidence'] = 'low'
+                if estimate and estimate.get('value', 0) > 0:
+                    estimated_tokens = float(estimate['value'])
+            if direct_ready or sparse_direct:
+                effective_tokens = float(median_tokens)
+                model_value_source = 'direct' if direct_ready else 'sparse_direct'
+            elif estimated_tokens is not None:
+                effective_tokens = estimated_tokens
+                model_value_source = 'bridge'
             else:
-                sample_status = 'ready'
-            ratio = (median_tokens / baseline_median) if sample_status == 'ready' and median_tokens is not None else None
+                effective_tokens = None
+                model_value_source = 'unavailable'
+
+            if effective_tokens and baseline_median and baseline_median > 0:
+                sample_status = 'ready' if direct_ready and baseline_source == 'direct' else 'estimated'
+            elif count == 0:
+                sample_status = 'no_data'
+            elif count < 3:
+                sample_status = 'insufficient'
+            else:
+                sample_status = 'no_baseline'
+            ratio = (effective_tokens / baseline_median) if effective_tokens and baseline_median else None
+            quota_direct_ready = quota_count >= 3 and median_quota and median_quota > 0
+            quota_sparse_direct = bool(quota_count and median_quota and median_quota > 0 and not quota_direct_ready)
+            quota_estimate = None
+            estimated_quota = None
+            if (not quota_direct_ready and not quota_sparse_direct and
+                    (quota_direct_values or quota_observed_values)):
+                quota_estimate = _codex_estimate_baseline_from_anchors(
+                    quota_direct_values, quota_bridge_graph, model, prefer_excluding=model
+                )
+                if quota_estimate is None and quota_observed_values:
+                    quota_estimate = _codex_estimate_baseline_from_anchors(
+                        quota_observed_values, quota_bridge_graph, model, prefer_excluding=model
+                    )
+                if quota_estimate and quota_estimate.get('value', 0) > 0:
+                    estimated_quota = float(quota_estimate['value'])
+            if quota_direct_ready or quota_sparse_direct:
+                effective_quota = float(median_quota)
+                quota_value_source = 'direct' if quota_direct_ready else 'sparse_direct'
+            elif estimated_quota is not None:
+                effective_quota = estimated_quota
+                quota_value_source = 'bridge'
+            else:
+                effective_quota = None
+                quota_value_source = 'unavailable'
+            quota_ratio = (
+                effective_quota / baseline_quota_median
+                if effective_quota and baseline_quota_median else None
+            )
+            if effective_quota and baseline_quota_median:
+                if quota_direct_ready and baseline_quota_source == 'direct':
+                    quota_sample_status = 'ready'
+                elif quota_value_source == 'bridge' or baseline_quota_source == 'bridge':
+                    quota_sample_status = 'estimated'
+                else:
+                    quota_sample_status = 'sparse_direct'
+            elif quota_count == 0:
+                quota_sample_status = 'no_data'
+            elif quota_count < 3:
+                quota_sample_status = 'insufficient'
+            else:
+                quota_sample_status = 'no_baseline'
             if count >= 12 and explicit_pct >= 60:
                 confidence = 'high'
             elif count >= 6:
                 confidence = 'medium'
             else:
                 confidence = 'low'
+            confidence_rank = {'low': 0, 'medium': 1, 'high': 2}
+            if estimate:
+                confidence = min(
+                    (confidence if count else 'high', estimate.get('confidence') or 'low'),
+                    key=lambda value: confidence_rank.get(value, 0),
+                )
+            if baseline_source == 'bridge' and baseline_estimate:
+                confidence = min(
+                    (confidence, baseline_estimate.get('confidence') or 'low'),
+                    key=lambda value: confidence_rank.get(value, 0),
+                )
+            if quota_estimate:
+                confidence = min(
+                    (confidence if quota_count else 'high', quota_estimate.get('confidence') or 'low'),
+                    key=lambda value: confidence_rank.get(value, 0),
+                )
+            if baseline_quota_source == 'bridge' and baseline_quota_estimate:
+                confidence = min(
+                    (confidence, baseline_quota_estimate.get('confidence') or 'low'),
+                    key=lambda value: confidence_rank.get(value, 0),
+                )
+            if split_count:
+                confidence = 'low'
+            elif repair_count:
+                confidence = 'low'
+            elif 0 < quota_count < 3:
+                confidence = 'low'
+            elif unconfirmed_count or pending_count:
+                confidence = min(
+                    (confidence, 'medium'),
+                    key=lambda value: confidence_rank.get(value, 0),
+                )
+            estimate_rep = (estimate or {}).get('representative') or {}
+            estimate_path = estimate_rep.get('bridge') or {}
+            baseline_rep = (baseline_estimate or {}).get('representative') or {}
+            baseline_path = baseline_rep.get('bridge') or {}
+            quota_estimate_rep = (quota_estimate or {}).get('representative') or {}
+            quota_estimate_path = quota_estimate_rep.get('bridge') or {}
+            quota_baseline_rep = (baseline_quota_estimate or {}).get('representative') or {}
+            quota_baseline_path = quota_baseline_rep.get('bridge') or {}
             cells[model] = {
                 'sample_status': sample_status,
                 'sample_count': count,
+                'mission_count': mission_count,
+                'pending_review_count': pending_count,
+                'pending_review_pct': round(100.0 * pending_count / count, 1) if count else 0.0,
+                'unconfirmed_count': unconfirmed_count,
+                'unconfirmed_pct': round(100.0 * unconfirmed_count / count, 1) if count else 0.0,
+                'split_attribution_count': split_count,
+                'repair_attribution_count': repair_count,
                 'median_total_tokens': round(median_tokens or 0),
+                'median_raw_total_tokens': round(median_raw_tokens or 0),
+                'median_repair_penalty_tokens': round(median_repair_penalty or 0),
+                'quota_sample_status': quota_sample_status,
+                'quota_sample_count': quota_count,
+                'median_quota_pct_5h': round(median_quota, 4) if median_quota is not None else None,
+                'median_raw_quota_pct_5h': round(median_raw_quota, 4) if median_raw_quota is not None else None,
+                'median_repair_penalty_quota_pct_5h': (
+                    round(median_repair_penalty_quota, 4)
+                    if median_repair_penalty_quota is not None else None
+                ),
+                'estimated_quota_pct_5h': round(estimated_quota, 4) if estimated_quota is not None else None,
+                'effective_quota_pct_5h': round(effective_quota, 4) if effective_quota is not None else None,
+                'quota_value_source': quota_value_source,
+                'estimated_total_tokens': round(estimated_tokens) if estimated_tokens is not None else None,
+                'effective_total_tokens': round(effective_tokens) if effective_tokens is not None else None,
+                'model_value_source': model_value_source,
                 'median_cost_usd': round(median_cost, 4) if median_cost is not None else None,
+                'cost_known_sample_count': len(known_costs),
                 'median_correction_turns': round(median_corrections or 0, 1),
                 'median_added_guidance_tokens': round(median_guidance or 0),
                 'first_pass_pct': round(first_pass_pct, 1),
                 'explicit_acceptance_pct': round(explicit_pct, 1),
                 'relative_tokens_vs_sol_high': round(ratio, 3) if ratio is not None else None,
+                'relative_quota_vs_sol_high': round(quota_ratio, 3) if quota_ratio is not None else None,
+                'quota_baseline_source': baseline_quota_source,
+                'quota_comparison_estimated': quota_sample_status == 'estimated',
+                'quota_bridge_anchor_model': quota_estimate_rep.get('anchor_model'),
+                'quota_bridge_path': quota_estimate_path.get('path') or [],
+                'quota_bridge_hops': int(quota_estimate_path.get('hops') or 0),
+                'quota_bridge_support': int(quota_estimate_path.get('support') or 0),
+                'quota_baseline_bridge_anchor_model': quota_baseline_rep.get('anchor_model'),
+                'quota_baseline_bridge_path': quota_baseline_path.get('path') or [],
+                'quota_baseline_bridge_hops': int(quota_baseline_path.get('hops') or 0),
+                'quota_baseline_bridge_support': int(quota_baseline_path.get('support') or 0),
                 'confidence': confidence,
+                'comparison_estimated': sample_status == 'estimated',
+                'baseline_source': baseline_source,
+                'bridge_anchor_model': estimate_rep.get('anchor_model'),
+                'bridge_anchor_sample_count': int((estimate or {}).get('anchor_sample_count') or 0),
+                'bridge_path': estimate_path.get('path') or [],
+                'bridge_hops': int(estimate_path.get('hops') or 0),
+                'bridge_support': int(estimate_path.get('support') or 0),
+                'baseline_bridge_anchor_model': baseline_rep.get('anchor_model'),
+                'baseline_bridge_anchor_sample_count': int((baseline_estimate or {}).get('anchor_sample_count') or 0),
+                'baseline_bridge_path': baseline_path.get('path') or [],
+                'baseline_bridge_hops': int(baseline_path.get('hops') or 0),
+                'baseline_bridge_support': int(baseline_path.get('support') or 0),
             }
         rows.append({'category': category_key, 'label': category['label'], 'cells': cells})
     return {
         'range_days': range_days,
         'baseline_model': baseline_model,
         'minimum_samples': 3,
-        'eligible_missions': len(eligible),
+        'eligible_missions': len(eligible_mission_ids),
+        'eligible_samples': len(eligible),
+        'pending_review_samples': sum(1 for item in eligible if item.get('pending_review')),
+        'unconfirmed_samples': sum(1 for item in eligible if item.get('unconfirmed')),
+        'split_attribution_samples': sum(1 for item in eligible if item.get('category_split')),
+        'repair_attribution_samples': sum(1 for item in eligible if item.get('repair_attributed')),
         'models': models,
         'rows': rows,
     }
@@ -5455,7 +7216,8 @@ def _attach_codex_delegated_turn(mission, turn):
     mission['model_totals'] = sorted(totals.values(), key=lambda item: -_safe_nonnegative_int(item.get('total_tokens')))
 
 
-def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
+def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
+                              quota_efficiency=None, quota_task_samples=None):
     now_utc = now if isinstance(now, datetime) else (_parse_iso_utc(now) if now else datetime.now(timezone.utc))
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
@@ -5465,11 +7227,12 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
         now_utc = now_utc.astimezone(timezone.utc)
     reviews = reviews if isinstance(reviews, dict) else load_codex_mission_reviews()
     boundaries = reviews.get('turn_boundaries') if isinstance(reviews.get('turn_boundaries'), dict) else {}
-    usage_by_turn = _codex_usage_by_turn(recent_events)
+    logical_turns = list((turn_scan or {}).get('turns') or [])
+    usage_by_turn = _codex_usage_by_turn(recent_events, logical_turns)
 
     thread_turns = {}
     delegated_turns = []
-    for raw_turn in (turn_scan or {}).get('turns') or []:
+    for raw_turn in logical_turns:
         if not isinstance(raw_turn, dict) or not raw_turn.get('turn_id') or not raw_turn.get('user_text'):
             continue
         turn = dict(raw_turn)
@@ -5517,7 +7280,9 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
                     finish_current('accepted_explicit', 'high', turn.get('started_at'))
                 continue
 
-            category, category_confidence = _codex_task_category(text, turn.get('cwd'))
+            categories, category, category_confidence, category_ambiguous = _codex_task_categories(
+                text, turn.get('cwd')
+            )
             if flags['acceptance_plus_work'] and current is not None and boundary != 'continue':
                 finish_current('accepted_explicit', 'high', turn.get('started_at'))
 
@@ -5540,6 +7305,35 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
                 else:
                     start_new = False
 
+            category_inherited = False
+            if current is not None and not start_new and (category == 'other' or category_confidence == 'low'):
+                previous_turn = (current.get('turns') or [])[-1] if current.get('turns') else None
+                inherited_category = None
+                inherited_confidence = 'low'
+                if isinstance(previous_turn, dict):
+                    previous_category = previous_turn.get('category')
+                    previous_confidence = str(previous_turn.get('category_confidence') or 'low')
+                    if previous_category in CODEX_TASK_CATEGORY_KEYS and previous_category != 'other':
+                        inherited_category = previous_category
+                        inherited_confidence = previous_confidence
+                if inherited_category is None:
+                    current_category = current.get('category')
+                    if current_category in CODEX_TASK_CATEGORY_KEYS and current_category != 'other':
+                        inherited_category = current_category
+                        inherited_confidence = str(current.get('category_confidence') or 'low')
+                if inherited_category:
+                    category = inherited_category
+                    categories = [inherited_category]
+                    category_confidence = 'medium' if inherited_confidence in ('high', 'medium') else 'low'
+                    category_ambiguous = False
+                    category_inherited = True
+
+            turn['category'] = category
+            turn['categories'] = list(categories)
+            turn['category_confidence'] = category_confidence
+            turn['category_ambiguous'] = category_ambiguous
+            turn['category_inherited'] = category_inherited
+
             if start_new:
                 if current is not None:
                     if inferred_boundary:
@@ -5547,7 +7341,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
                     else:
                         finish_current()
                 current = {
-                    'turns': [], 'category': category,
+                    'turns': [], 'category': category, 'categories': list(categories),
                     'category_confidence': category_confidence,
                     'status': 'unresolved', 'status_confidence': 'low',
                     'accepted_at': '',
@@ -5557,6 +7351,11 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
                    current.get('category') in ('other', 'software_debugging', 'research'))):
                 current['category'] = category
                 current['category_confidence'] = category_confidence
+            current_categories = list(current.get('categories') or [])
+            for category_key in categories:
+                if category_key not in current_categories:
+                    current_categories.append(category_key)
+            current['categories'] = current_categories
             current['turns'].append(turn)
 
         finish_current()
@@ -5588,6 +7387,14 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
             orphan_delegated += 1
 
     missions.sort(key=lambda mission: (str(mission.get('start_at') or ''), mission.get('id') or ''), reverse=True)
+    _codex_apply_repair_penalties(missions)
+    _codex_apply_mission_quota_estimates(
+        missions,
+        quota_efficiency=quota_efficiency,
+        quota_task_samples=quota_task_samples,
+    )
+    review_cases = _codex_collect_review_cases(missions)
+    repair_accounting = _codex_repair_accounting_summary(missions)
     matrices = {
         '90': _codex_task_matrix(missions, 90, now_utc),
         '180': _codex_task_matrix(missions, 180, now_utc),
@@ -5607,6 +7414,8 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
         'generated_at': now_utc.isoformat(),
         'categories': list(CODEX_TASK_CATEGORIES),
         'missions': missions,
+        'review_cases': review_cases,
+        'repair_accounting': repair_accounting,
         'matrices': matrices,
         'summary': {
             'mission_count': len(missions),
@@ -5615,6 +7424,9 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None):
             'abandoned_count': sum(1 for mission in missions if mission.get('status').startswith('abandoned')),
             'mixed_model_count': mixed_count,
             'reviewed_count': reviewed_count,
+            'review_case_count': len(review_cases),
+            'repair_penalty_tokens': repair_accounting['repair_penalty_tokens'],
+            'effective_tokens': repair_accounting['effective_tokens'],
             'category_counts': category_counts,
         },
         'diagnostics': {
@@ -6481,8 +8293,17 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
         )
         if default_scan:
             mission_turns = scan_codex_mission_turns(now=now_utc)
+            task_quota_samples, _ = _build_codex_quota_task_samples(
+                all_quota_observations,
+                all_recent_events,
+                all_finished_turn_ids,
+            )
             task_outcomes = build_codex_task_outcomes(
-                mission_turns, all_recent_events, now=now_utc
+                mission_turns,
+                all_recent_events,
+                now=now_utc,
+                quota_efficiency=quota_efficiency,
+                quota_task_samples=task_quota_samples,
             )
         else:
             task_outcomes = {

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=20260912-fixed-timeline-axis-1">
+    <link rel="stylesheet" href="style.css?v=20260918-task-matrix-quota-chain-3">
 </head>
 <body>
     <div class="app-container">
@@ -1368,7 +1368,7 @@
                 <h2>Hiệu Quả Model Theo Loại Công Việc</h2>
                 <p>
                     Ghép mọi lượt sửa, giảng lại và tiếp tục cho đến khi một mục tiêu được chấp nhận.
-                    Ma trận chỉ dùng nhiệm vụ một model và đủ mẫu; tuyến đổi model hoặc có subagent được giữ riêng để tránh quy công sai.
+                    Ma trận gom toàn bộ các lượt liên quan thành một nhiệm vụ hoàn chỉnh rồi quy mức tiêu hao hạn mức Codex 5h theo model và loại việc; token được giữ làm bằng chứng phụ, mẫu chưa xác nhận vẫn được dùng với confidence thấp hơn.
                 </p>
             </section>
 
@@ -1381,8 +1381,8 @@
             <section class="section task-outcome-section">
                 <div class="section-header task-outcome-header">
                     <div>
-                        <h2 class="section-title">Ma Trận Tổng Token Đến Khi Đạt Yêu Cầu</h2>
-                        <p class="section-desc" id="task-outcome-matrix-note">Sol High là 1.00× trong cùng loại công việc. Ô thiếu mẫu không được nội suy.</p>
+                        <h2 class="section-title">Ma Trận Hao Phí Hạn Mức 5h Đến Khi Đạt Yêu Cầu</h2>
+                        <p class="section-desc" id="task-outcome-matrix-note">Sol High là 1.00× trong cùng loại công việc. Hệ số dựa trên % hạn mức 5h hiệu dụng; token chỉ dùng để giải thích lượng công việc.</p>
                     </div>
                     <div class="task-outcome-controls">
                         <label for="task-outcome-range">Khoảng đo</label>
@@ -1404,7 +1404,7 @@
                     <span><i class="task-cell-dot ready"></i> Đủ mẫu</span>
                     <span><i class="task-cell-dot sparse"></i> Chưa đủ mẫu</span>
                     <span><i class="task-cell-dot missing"></i> Chưa có dữ liệu</span>
-                    <span>Hệ số &lt;1× dùng ít token hơn Sol High; &gt;1× dùng nhiều hơn.</span>
+                    <span>Hệ số &lt;1× tiêu hao ít hạn mức 5h hơn Sol High; &gt;1× tiêu hao nhiều hơn.</span>
                 </div>
             </section>
 
@@ -1412,7 +1412,7 @@
                 <div class="section-header task-outcome-header">
                     <div>
                         <h2 class="section-title">Kiểm Tra Các Nhiệm Vụ Đã Ghép</h2>
-                        <p class="section-desc" id="task-outcome-audit-note">Tự động phân nhóm chỉ là gợi ý. Hãy sửa loại việc, kết quả hoặc ranh giới trước khi tin một ô ít mẫu.</p>
+                        <p class="section-desc" id="task-outcome-audit-note">Không cần review từng mẫu. Hệ thống tự phân loại hàng loạt và chỉ ưu tiên các case khó, mơ hồ hoặc confidence thấp để bạn quyết định.</p>
                     </div>
                     <span class="chart-badge" id="task-outcome-visible-count">0 nhiệm vụ</span>
                 </div>
@@ -1430,6 +1430,10 @@
                         <option value="pure">Một model</option>
                         <option value="mixed">Đổi model / subagent</option>
                     </select>
+                    <select id="task-outcome-review-filter" class="filter-select">
+                        <option value="all">Tất cả mission</option>
+                        <option value="hard">Chỉ case khó / chưa chắc</option>
+                    </select>
                 </div>
                 <div class="table-container task-outcome-audit-wrap">
                     <table class="data-table task-outcome-audit-table" id="task-outcome-audit-table">
@@ -1438,9 +1442,9 @@
                                 <th style="min-width:280px;">Nhiệm vụ đã ghép</th>
                                 <th style="min-width:170px;">Loại công việc</th>
                                 <th style="min-width:150px;">Kết quả</th>
-                                <th style="min-width:190px;">Tuyến model</th>
+                                <th style="min-width:280px;">Tuyến model / nối lượt sửa</th>
                                 <th class="num" style="min-width:90px;">Lượt / Sửa</th>
-                                <th class="num" style="min-width:130px;">Tổng token</th>
+                                <th class="num" style="min-width:150px;">Hạn mức 5h / token</th>
                                 <th class="num" style="min-width:120px;">Công dạy thêm</th>
                                 <th style="min-width:130px;">Bắt đầu</th>
                                 <th style="min-width:100px;">Tin cậy</th>
@@ -1798,6 +1802,6 @@
     <!-- Fallback data for offline/file-protocol mode -->
     <script src="data.js"></script>
     <script src="i18n.js?v=20260916-bilingual-3"></script>
-    <script src="app.js?v=20260916-bilingual-2"></script>
+    <script src="app.js?v=20260918-task-matrix-quota-chain-3"></script>
 </body>
 </html>

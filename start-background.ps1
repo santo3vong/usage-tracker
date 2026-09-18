@@ -10,13 +10,46 @@ $stdoutLog = Join-Path $runtime "server.out.log"
 $stderrLog = Join-Path $runtime "server.err.log"
 $url = "http://127.0.0.1:5050/"
 
+function Test-CanonicalTrackerProcess {
+    param(
+        [int]$ProcessId,
+        $ProcessInfo
+    )
+
+    if (-not $ProcessInfo) {
+        return $false
+    }
+
+    # New managed launches use the absolute runner path and can be identified
+    # directly from the command line.
+    if ($ProcessInfo.CommandLine -like "*$runner*") {
+        return $true
+    }
+
+    # Older launches used `-B run_server.py`, so the command line alone cannot
+    # identify which checkout owns the listener.  Only accept that legacy form
+    # when the loopback server is actually serving the exact runner file from
+    # this checkout.
+    if ($ProcessInfo.CommandLine -notmatch '(?i)(?:^|\s)["'']?run_server\.py["'']?(?:\s|$)') {
+        return $false
+    }
+
+    try {
+        $remoteRunner = Invoke-WebRequest -Uri ($url + "run_server.py") -UseBasicParsing -TimeoutSec 2
+        $localRunner = Get-Content -LiteralPath $runner -Raw
+        return ($remoteRunner.StatusCode -eq 200 -and $remoteRunner.Content -ceq $localRunner)
+    } catch {
+        return $false
+    }
+}
+
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 
 $listener = Get-NetTCPConnection -LocalPort 5050 -State Listen -ErrorAction SilentlyContinue
 if ($listener) {
     $listenerPid = @($listener | Select-Object -ExpandProperty OwningProcess -Unique)[0]
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$listenerPid" -ErrorAction SilentlyContinue
-    if ($listenerProcess -and $listenerProcess.CommandLine -like "*$runner*") {
+    if (Test-CanonicalTrackerProcess -ProcessId $listenerPid -ProcessInfo $listenerProcess) {
         try {
             $existing = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
             if ($existing.StatusCode -eq 200 -and $existing.Content -match "Usage Tracker") {

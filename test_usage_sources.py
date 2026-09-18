@@ -2044,7 +2044,7 @@ class UsageSourcesTests(unittest.TestCase):
         self.assertEqual(xhigh['latest']['sample_count'], 1)
         self.assertEqual(xhigh['latest']['baseline_sample_count'], 1)
 
-    def test_codex_quota_efficiency_timeline_requires_same_window_baseline(self):
+    def test_codex_quota_efficiency_timeline_keeps_model_without_baseline(self):
         observations = [
             {'session': 'sol-old', 'model_key': '5.6 sol high',
              'ts': '2026-09-05T09:00:00+00:00', 'resets_at': '2026-09-05T14:00:00+00:00',
@@ -2063,9 +2063,45 @@ class UsageSourcesTests(unittest.TestCase):
             observations, now=datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc),
             range_days=7, window_days_options=(1,),
         )
-        keys = {row['model_key'] for row in result['windows']['1']['models']}
-        self.assertIn('5.6 sol high', keys)
-        self.assertNotIn('gpt-6 astra low', keys)
+        rows = {row['model_key']: row for row in result['windows']['1']['models']}
+        self.assertIn('5.6 sol high', rows)
+        self.assertIn('gpt-6 astra low', rows)
+        latest = rows['gpt-6 astra low']['latest']
+        self.assertEqual(latest['tokens_per_quota_pct'], 20000.0)
+        self.assertIsNone(latest['relative_quota_burn_vs_sol_high'])
+        self.assertEqual(latest['baseline_source'], 'unavailable')
+        self.assertFalse(latest['comparison_estimated'])
+
+    def test_codex_quota_efficiency_timeline_bridges_missing_sol_baseline(self):
+        def pair(session, model, day, start_used, start_tokens, end_tokens):
+            return [
+                {'session': session, 'model_key': model,
+                 'ts': f'{day}T09:00:00+00:00', 'resets_at': f'{day}T14:00:00+00:00',
+                 'used_percent': start_used, 'total_tokens': start_tokens},
+                {'session': session, 'model_key': model,
+                 'ts': f'{day}T10:00:00+00:00', 'resets_at': f'{day}T14:00:00+00:00',
+                 'used_percent': start_used + 2, 'total_tokens': end_tokens},
+            ]
+
+        observations = []
+        observations += pair('sol-day5', '5.6 sol high', '2026-09-05', 10, 100_000, 200_000)
+        observations += pair('luna-day5', '5.6 luna xhigh', '2026-09-05', 20, 100_000, 150_000)
+        observations += pair('luna-day6', '5.6 luna xhigh', '2026-09-06', 10, 100_000, 150_000)
+        observations += pair('astra-day6', 'gpt-6 astra low', '2026-09-06', 20, 100_000, 120_000)
+        observations += pair('astra-new', 'gpt-6 astra low', '2026-09-09', 30, 100_000, 120_000)
+
+        result = server.build_codex_quota_efficiency_timeline(
+            observations, now=datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc),
+            range_days=7, window_days_options=(1,),
+        )
+        rows = {row['model_key']: row for row in result['windows']['1']['models']}
+        latest = rows['gpt-6 astra low']['latest']
+        self.assertEqual(latest['baseline_source'], 'bridge')
+        self.assertTrue(latest['comparison_estimated'])
+        self.assertEqual(latest['relative_quota_burn_vs_sol_high'], 5.0)
+        self.assertEqual(latest['bridge_path'], ['gpt-6 astra low', '5.6 luna xhigh', '5.6 sol high'])
+        self.assertEqual(latest['bridge_hops'], 2)
+        self.assertEqual(latest['confidence'], 'low')
 
     def test_codex_quota_efficiency_timeline_confidence_uses_weaker_side(self):
         observations = [

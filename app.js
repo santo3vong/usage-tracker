@@ -3049,6 +3049,7 @@ let currentTaskOutcomeRange = savedChoice('taskOutcomeRange', ['90', '180', '365
 let currentTaskOutcomeCategoryFilter = typeof uiPreferences.taskOutcomeCategoryFilter === 'string' ? uiPreferences.taskOutcomeCategoryFilter : 'all';
 let currentTaskOutcomeStatusFilter = savedChoice('taskOutcomeStatusFilter', ['all', 'accepted', 'unresolved', 'abandoned'], 'all');
 let currentTaskOutcomeRouteFilter = savedChoice('taskOutcomeRouteFilter', ['all', 'pure', 'mixed'], 'all');
+let currentTaskOutcomeReviewFilter = savedChoice('taskOutcomeReviewFilter', ['all', 'hard'], 'all');
 
 function renderModelsBreakdown(breakdown, codexUsage, modelsDailyTimeline) {
     renderModelsSummaryCards(breakdown, codexUsage);
@@ -3105,20 +3106,26 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         if (!points.length) return null;
         const latest = points[points.length - 1];
         const previous = quotaTimelinePreviousPoint(points, latest, windowDays);
-        const latestValue = Number(latest.relative_quota_burn_vs_sol_high);
-        const previousValue = Number(previous?.relative_quota_burn_vs_sol_high);
+        const latestValue = latest.relative_quota_burn_vs_sol_high == null
+            ? null : Number(latest.relative_quota_burn_vs_sol_high);
+        const previousValue = previous?.relative_quota_burn_vs_sol_high == null
+            ? null : Number(previous.relative_quota_burn_vs_sol_high);
         const changePct = Number.isFinite(latestValue) && latestValue > 0 && Number.isFinite(previousValue) && previousValue > 0
             ? (latestValue / previousValue - 1) * 100
             : null;
         return { ...row, points, latest, previous, changePct };
     }).filter(Boolean).sort((a, b) => (
-        Number(b.latest?.relative_quota_burn_vs_sol_high || 0) - Number(a.latest?.relative_quota_burn_vs_sol_high || 0)
+        (b.latest?.relative_quota_burn_vs_sol_high == null ? -Infinity : Number(b.latest.relative_quota_burn_vs_sol_high))
+        - (a.latest?.relative_quota_burn_vs_sol_high == null ? -Infinity : Number(a.latest.relative_quota_burn_vs_sol_high))
     ));
 
     if (!data?.available || !windowData?.available || !rows.length) {
-        body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText('Chưa đủ dữ liệu cục bộ có Sol High trong cùng cửa sổ để so sánh.', 'Not enough local data with Sol High in the same window for comparison.')}</td></tr>`;
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${uiText('Chưa có khoảng đo quota 5h hợp lệ trong phạm vi đang xem.', 'No valid 5-hour quota intervals are available in the selected range.')}</td></tr>`;
         legend.innerHTML = '';
-        if (status) status.textContent = uiText('Cần ít nhất một khoảng đo của model và một khoảng đo Sol High trong cùng cửa sổ.', 'At least one model interval and one Sol High interval are required in the same window.');
+        if (status) status.textContent = uiText(
+            'Dữ liệu model vẫn được giữ riêng; so sánh với Sol High chỉ hiện khi có mốc trực tiếp hoặc bắc cầu đủ bằng chứng.',
+            'Model data is retained independently; comparison with Sol High appears only when a direct baseline or sufficiently supported bridge is available.',
+        );
         const c = CanvasCharts.initCanvas(canvas);
         if (c) c.ctx.clearRect(0, 0, c.width, c.height);
         return;
@@ -3142,7 +3149,10 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         ? rows
         : rows.filter(row => currentCodexQuotaTimelineSelection.has(row.model_key));
     const datasets = selectedRows.map(row => {
-        const byDate = new Map(row.points.map(point => [point.date, Number(point.relative_quota_burn_vs_sol_high)]));
+        const byDate = new Map(row.points.map(point => [
+            point.date,
+            point.relative_quota_burn_vs_sol_high == null ? null : Number(point.relative_quota_burn_vs_sol_high),
+        ]));
         return {
             label: row.model_key,
             color: colorFor(row.model_key),
@@ -3160,8 +3170,10 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     body.innerHTML = rows.map(row => {
         const latest = row.latest || {};
         const previous = row.previous || {};
-        const latestValue = Number(latest.relative_quota_burn_vs_sol_high);
-        const previousValue = Number(previous.relative_quota_burn_vs_sol_high);
+        const latestValue = latest.relative_quota_burn_vs_sol_high == null
+            ? null : Number(latest.relative_quota_burn_vs_sol_high);
+        const previousValue = previous.relative_quota_burn_vs_sol_high == null
+            ? null : Number(previous.relative_quota_burn_vs_sol_high);
         const tokensPerPct = Number(latest.tokens_per_quota_pct);
         const change = row.changePct;
         const changeClass = Number.isFinite(change) ? (change > 2 ? 'quota-change-up' : (change < -2 ? 'quota-change-down' : 'quota-change-flat')) : 'quota-change-flat';
@@ -3173,29 +3185,51 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         const confidence = confidenceLabel[confidenceKey];
         const modelConfidence = confidenceLabel[latest.model_confidence] || confidenceLabel.low;
         const baselineConfidence = confidenceLabel[latest.baseline_confidence] || confidenceLabel.low;
+        const baselineSource = latest.baseline_source || 'unavailable';
+        const bridgePath = Array.isArray(latest.bridge_path) ? latest.bridge_path : [];
+        const bridgeText = bridgePath.length > 1 ? bridgePath.join(' → ') : '';
+        const comparisonBadge = baselineSource === 'bridge'
+            ? `<span class="task-cell-meta">${uiText('ước lượng bắc cầu', 'bridged estimate')}</span>`
+            : (baselineSource === 'unavailable' ? `<span class="task-cell-meta">${uiText('chưa có mốc Sol High', 'no Sol High baseline')}</span>` : '');
+        const baselineSamplesText = baselineSource === 'bridge'
+            ? uiText(
+                `ước lượng từ ${formatNumber(Number(latest.baseline_estimate_anchor_count || 0))} mốc`,
+                `estimated from ${formatNumber(Number(latest.baseline_estimate_anchor_count || 0))} anchors`,
+            )
+            : formatNumber(Number(latest.baseline_sample_count || 0));
+        const confidenceTitle = baselineSource === 'bridge'
+            ? uiText(
+                `Model: ${modelConfidence} · mốc Sol High: ${baselineConfidence} (bắc cầu${bridgeText ? ` ${bridgeText}` : ''}, support ${Number(latest.bridge_support || 0)})`,
+                `Model: ${modelConfidence} · Sol High baseline: ${baselineConfidence} (bridge${bridgeText ? ` ${bridgeText}` : ''}, support ${Number(latest.bridge_support || 0)})`,
+            )
+            : (baselineSource === 'direct'
+                ? uiText(`Model: ${modelConfidence} · Sol High trực tiếp: ${baselineConfidence}`, `Model: ${modelConfidence} · direct Sol High: ${baselineConfidence}`)
+                : uiText(`Model: ${modelConfidence} · chưa có mốc Sol High đủ bằng chứng`, `Model: ${modelConfidence} · no sufficiently supported Sol High baseline`));
         return `<tr>
             <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
-            <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(latestValue) ? latestValue.toFixed(2) + '×' : '—'}</strong></td>
+            <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(latestValue) ? latestValue.toFixed(2) + '×' : '—'}</strong>${comparisonBadge}</td>
             <td class="num">${Number.isFinite(previousValue) ? previousValue.toFixed(2) + '×' : '—'}</td>
             <td class="num"><span class="${changeClass}">${changeText}</span></td>
             <td class="num">${Number.isFinite(tokensPerPct) ? formatNumber(Math.round(tokensPerPct)) : '—'}</td>
-            <td class="num">${formatNumber(Number(latest.sample_count || 0))} / ${formatNumber(Number(latest.baseline_sample_count || 0))}</td>
-            <td title="Model: ${escapeHtml(modelConfidence)} · Sol High: ${escapeHtml(baselineConfidence)}"><span class="quota-confidence-${confidenceKey}">${escapeHtml(confidence)}</span></td>
+            <td class="num">${formatNumber(Number(latest.sample_count || 0))} / ${escapeHtml(baselineSamplesText)}</td>
+            <td title="${escapeHtml(confidenceTitle)}"><span class="quota-confidence-${confidenceKey}">${escapeHtml(confidence)}</span></td>
             <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? `<span class="quota-recent-stale"> · ${uiText('dữ liệu cũ', 'stale data')}</span>` : ''}</td>
         </tr>`;
     }).join('');
 
     if (status) {
         const visiblePoints = rows.reduce((sum, row) => sum + row.points.length, 0);
+        const bridgePoints = rows.reduce((sum, row) => sum + row.points.filter(point => point.baseline_source === 'bridge').length, 0);
+        const unavailablePoints = rows.reduce((sum, row) => sum + row.points.filter(point => point.baseline_source === 'unavailable').length, 0);
         status.textContent = uiText(
-            `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh cục bộ.`,
-            `${rangeDays} days · ${windowDays}-day rolling median · ${formatNumber(Number(data.interval_count || 0))} valid intervals · ${formatNumber(visiblePoints)} local comparison points.`,
+            `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm model · ${formatNumber(bridgePoints)} điểm bắc cầu · ${formatNumber(unavailablePoints)} điểm chưa có mốc.`,
+            `${rangeDays} days · ${windowDays}-day rolling median · ${formatNumber(Number(data.interval_count || 0))} valid intervals · ${formatNumber(visiblePoints)} model points · ${formatNumber(bridgePoints)} bridged points · ${formatNumber(unavailablePoints)} points without a baseline.`,
         );
     }
     if (note) {
         note.textContent = uiText(
-            'Mỗi điểm lấy median của các khoảng đo gần đó và chỉ dùng Sol High trong cùng cửa sổ làm mốc. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Độ tin cậy dựa trên số mẫu, số phiên và quota span của cả hai bên. Cửa sổ 1 ngày nhạy hơn; 7 ngày ổn định hơn. Đây không phải trọng số chính thức của OpenAI.',
-            'Each point is the median of nearby measurement intervals and uses only Sol High from the same window as the baseline. >1× means the model burns the 5-hour quota faster for the same raw-token volume. Confidence depends on samples, independent sessions, and observed quota span on both sides. A 1-day window is more sensitive; 7 days is more stable. This is not an official OpenAI weighting.',
+            'Mỗi điểm luôn giữ median quota-efficiency riêng của model. Sol High cùng cửa sổ được ưu tiên làm mốc trực tiếp; khi thiếu, tracker chỉ bắc cầu qua quan hệ model đã từng đo chồng lấp trong lịch sử và hạ độ tin cậy. Nếu không có đường bắc cầu đủ bằng chứng, tỷ lệ để trống thay vì ép thành 0. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Đây không phải trọng số chính thức của OpenAI.',
+            'Each point always keeps the model\'s own median quota efficiency. Sol High in the same window is preferred as a direct baseline; when unavailable, the tracker only bridges through historically overlapping model relationships and lowers confidence. Without a sufficiently supported bridge, the ratio stays blank instead of being forced to zero. >1× means the model burns the 5-hour quota faster for the same raw-token volume. This is not an official OpenAI weighting.',
         );
     }
 }
@@ -4300,8 +4334,10 @@ function renderCodexTaskOutcomeSummary(outcomes) {
         [uiText('Nhiệm vụ đã ghép', 'Grouped tasks'), formatNumber(Number(summary.mission_count || 0)), uiText('Từ các lượt Codex trực tiếp', 'Built from direct Codex turns')],
         [uiText('Đã đạt yêu cầu', 'Accepted'), formatNumber(Number(summary.accepted_count || 0)), uiText('Xác nhận hoặc suy ra có độ tin cậy', 'Confirmed or inferred with confidence')],
         [uiText('Chưa xác nhận', 'Unconfirmed'), formatNumber(Number(summary.unresolved_count || 0)), uiText('Cần kiểm tra trước khi dùng', 'Review before using as evidence')],
-        [uiText('Đổi model / subagent', 'Model switch / subagent'), formatNumber(Number(summary.mixed_model_count || 0)), uiText('Giữ thành tuyến, loại khỏi ma trận chính', 'Route is preserved and excluded from the pure-model matrix')],
+        [uiText('Đổi model / subagent', 'Model switch / subagent'), formatNumber(Number(summary.mixed_model_count || 0)), uiText('Tuyến không quy được bị loại; lượt sửa lỗi được quy riêng', 'Unattributable routes are excluded; repair turns are attributed separately')],
         [uiText('Đã được anh kiểm tra', 'Manually reviewed'), formatNumber(Number(summary.reviewed_count || 0)), uiText('Loại việc hoặc kết quả đã sửa tay', 'Task type or outcome was manually corrected')],
+        [uiText('Case khó cần xem', 'Hard cases to review'), formatNumber(Number(summary.review_case_count || 0)), uiText('Chỉ lượt mơ hồ, nhãn khác hoặc độ tin cậy thấp', 'Only ambiguous turns, other labels, or low-confidence cases')],
+        [uiText('Phạt sửa lỗi', 'Repair penalty'), formatNumber(Number(summary.repair_penalty_tokens || 0)), uiText('Token sửa bằng model khác cộng thêm cho model gây lỗi', 'Repair tokens from another model are also charged to the model that caused the error')],
     ];
     container.innerHTML = cards.map(([label, value, note]) => `
         <div class="summary-card">
@@ -4335,22 +4371,69 @@ function renderCodexTaskOutcomeMatrix(outcomes = cachedCodexTaskOutcomes) {
             if (cell.sample_status === 'no_data') {
                 return `<td class="task-matrix-cell is-missing">${uiText('Chưa có dữ liệu', 'No data')}</td>`;
             }
-            if (cell.sample_status === 'insufficient') {
-                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đủ mẫu', 'Insufficient samples')} (n=${Number(cell.sample_count || 0)})<span class="task-cell-meta">${uiText('Trung vị', 'Median')} ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
+            const quotaStatus = String(cell.quota_sample_status || 'no_data');
+            if (quotaStatus === 'no_data') {
+                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đo được hạn mức 5h', '5-hour quota not measured yet')}<span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} ${uiText('token tham khảo', 'reference tokens')}</span></td>`;
             }
-            if (cell.sample_status === 'no_baseline') {
-                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đủ mẫu Sol High', 'Insufficient Sol High samples')}<span class="task-cell-meta">${uiText('Model này', 'This model')}: n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
+            if (quotaStatus === 'insufficient') {
+                return `<td class="task-matrix-cell is-sparse">${uiText('Chưa đủ mẫu hạn mức', 'Insufficient quota samples')} (n=${Number(cell.quota_sample_count || 0)})<span class="task-cell-meta">${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
             }
-            const ratio = Number(cell.relative_tokens_vs_sol_high);
-            const cellClass = model === matrix.baseline_model ? 'is-baseline' : (ratio < 0.95 ? 'is-efficient' : (ratio > 1.05 ? 'is-costly' : ''));
+            if (quotaStatus === 'no_baseline') {
+                return `<td class="task-matrix-cell is-sparse">Chưa đủ mốc hạn mức Sol High<span class="task-cell-meta">Model này: ${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · n=${Number(cell.quota_sample_count || 0)}</span></td>`;
+            }
+            const ratio = cell.relative_quota_vs_sol_high == null ? null : Number(cell.relative_quota_vs_sol_high);
+            const estimated = quotaStatus === 'estimated' || cell.quota_comparison_estimated === true;
+            const sparseQuota = quotaStatus === 'sparse_direct';
+            const cellClass = model === matrix.baseline_model
+                ? 'is-baseline'
+                : ((estimated || sparseQuota) ? 'is-sparse' : (ratio < 0.95 ? 'is-efficient' : (ratio > 1.05 ? 'is-costly' : '')));
             const costText = cell.median_cost_usd === null || cell.median_cost_usd === undefined
                 ? uiText('phí chưa rõ', 'cost unknown')
                 : `$${Number(cell.median_cost_usd).toFixed(2)}`;
+            const effectiveTokens = Number(cell.effective_total_tokens);
+            const directMedian = Number(cell.median_total_tokens);
+            const rawMedian = Number(cell.median_raw_total_tokens);
+            const repairPenaltyMedian = Number(cell.median_repair_penalty_tokens);
+            const effectiveQuota = Number(cell.effective_quota_pct_5h);
+            const directQuota = Number(cell.median_quota_pct_5h);
+            const rawQuota = Number(cell.median_raw_quota_pct_5h);
+            const repairPenaltyQuota = Number(cell.median_repair_penalty_quota_pct_5h);
+            const quotaBridgePath = Array.isArray(cell.quota_bridge_path) ? cell.quota_bridge_path : [];
+            const quotaBaselineBridgePath = Array.isArray(cell.quota_baseline_bridge_path) ? cell.quota_baseline_bridge_path : [];
+            const estimateDetails = [];
+            if (estimated && cell.estimated_quota_pct_5h != null) {
+                estimateDetails.push(`hạn mức model ${quotaBridgePath.length > 1 ? quotaBridgePath.join(' → ') : 'bắc cầu'} · support ${Number(cell.quota_bridge_support || 0)}`);
+            }
+            if (cell.quota_baseline_source === 'bridge') {
+                estimateDetails.push(`mốc hạn mức Sol ${quotaBaselineBridgePath.length > 1 ? quotaBaselineBridgePath.join(' → ') : 'bắc cầu'} · support ${Number(cell.quota_baseline_bridge_support || 0)}`);
+            }
+            const bridgeMeta = estimateDetails.length
+                ? `<span class="task-cell-meta" title="${escapeHtml(estimateDetails.join(' | '))}">${escapeHtml(estimateDetails.join(' · '))}</span>`
+                : '';
+            const quotaText = String(cell.quota_value_source || '') === 'sparse_direct'
+                ? `Tạm tính từ median trực tiếp ${Number.isFinite(directQuota) ? directQuota.toFixed(2) : '—'}% hạn mức 5h`
+                : (estimated
+                    ? `Ước lượng ${Number.isFinite(effectiveQuota) ? effectiveQuota.toFixed(2) : '—'}% hạn mức 5h`
+                    : `${Number.isFinite(directQuota) ? directQuota.toFixed(2) : '—'}% hạn mức 5h`);
+            const tokenText = `${formatNumber(Number(cell.median_total_tokens || 0))} token tham khảo`;
+            const rawEvidenceText = estimated
+                ? `Dữ liệu trực tiếp: n=${Number(cell.sample_count || 0)}${Number(cell.sample_count || 0) > 0 ? ` · median ${formatNumber(Number.isFinite(directMedian) ? Math.round(directMedian) : 0)} token` : ''}`
+                : `n=${Number(cell.sample_count || 0)} · sửa ${Number(cell.median_correction_turns || 0).toFixed(1)} lượt · đạt lần đầu ${Number(cell.first_pass_pct || 0).toFixed(0)}%`;
+            const repairPenaltyText = Number.isFinite(repairPenaltyMedian) && repairPenaltyMedian > 0
+                ? `<span class="task-cell-meta">Gốc ${formatNumber(Number.isFinite(rawMedian) ? Math.round(rawMedian) : 0)} + phạt sửa lỗi ${formatNumber(Math.round(repairPenaltyMedian))} token</span>`
+                : '';
+            const repairPenaltyQuotaText = Number.isFinite(repairPenaltyQuota) && repairPenaltyQuota > 0
+                ? `<span class="task-cell-meta">Hạn mức gốc ${Number.isFinite(rawQuota) ? rawQuota.toFixed(2) : '0.00'}% + phạt ${repairPenaltyQuota.toFixed(2)}%</span>`
+                : '';
             return `<td class="task-matrix-cell ${cellClass}">
-                <span class="task-cell-ratio">${Number.isFinite(ratio) ? ratio.toFixed(2) + '×' : '—'}</span>
-                <span class="task-cell-meta">${formatNumber(Number(cell.median_total_tokens || 0))} token · ${costText}</span>
-                <span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · ${uiText('sửa', 'corrections')} ${Number(cell.median_correction_turns || 0).toFixed(1)} ${uiText('lượt', 'turns')} · ${uiText('đạt lần đầu', 'first-pass')} ${Number(cell.first_pass_pct || 0).toFixed(0)}%</span>
-                <span class="task-cell-meta">${uiText('Công dạy', 'Added guidance')} ~${formatNumber(Number(cell.median_added_guidance_tokens || 0))} token · ${uiText('tin cậy', 'confidence')} ${escapeHtml(tr(cell.confidence || 'low'))}</span>
+                <span class="task-cell-ratio">${Number.isFinite(ratio) ? ratio.toFixed(2) + '×' : '—'}${estimated ? ` · ${uiText('ước lượng', 'estimated')}` : (sparseQuota ? ` · ${uiText('mẫu ít', 'sparse')}` : '')}</span>
+                <span class="task-cell-meta">${quotaText}</span>
+                <span class="task-cell-meta">${tokenText} · ${costText}</span>
+                <span class="task-cell-meta">${rawEvidenceText}</span>
+                ${repairPenaltyQuotaText}
+                ${repairPenaltyText}
+                ${bridgeMeta}
+                <span class="task-cell-meta">${estimated ? '' : `${uiText('Công dạy', 'Added guidance')} ~${formatNumber(Number(cell.median_added_guidance_tokens || 0))} token · `}${uiText('tin cậy', 'confidence')} ${escapeHtml(tr(cell.confidence || 'low'))}</span>
             </td>`;
         }).join('');
         return `<tr><td><strong>${escapeHtml(tr(row.label || row.category || 'Khác'))}</strong></td>${cells}</tr>`;
@@ -4361,21 +4444,32 @@ function renderCodexTaskOutcomeMatrix(outcomes = cachedCodexTaskOutcomes) {
             ? uiText('toàn bộ dữ liệu', 'all data')
             : uiText(`${currentTaskOutcomeRange} ngày`, `${currentTaskOutcomeRange} days`);
         note.textContent = uiText(
-            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} nhiệm vụ một model đã đạt · cần ít nhất ${Number(matrix.minimum_samples || 3)} mẫu mỗi ô và mốc ${matrix.baseline_model || 'Sol High'}.`,
-            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} accepted single-model tasks · at least ${Number(matrix.minimum_samples || 3)} samples per cell are required, with ${matrix.baseline_model || 'Sol High'} as the baseline.`,
+            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} nhiệm vụ hợp lệ; hệ số chính là % hạn mức Codex 5h hiệu dụng đến khi đạt yêu cầu, còn token chỉ là dữ liệu giải thích. Mỗi n là một nhiệm vụ hoàn chỉnh sau khi cộng các lượt/model/loại việc liên quan. Nhiệm vụ chưa xác nhận vẫn được dùng với độ tin cậy thấp hơn; ${formatNumber(Number(matrix.repair_attribution_samples || 0))} mẫu có quy hao phí sửa lỗi lũy kế. Cần ít nhất ${Number(matrix.minimum_samples || 3)} nhiệm vụ để có số trực tiếp. Mốc ${matrix.baseline_model || 'Sol High'} cùng loại việc được ưu tiên; dữ liệu hạn mức đo trực tiếp được dùng trước, sau đó mới đến tốc độ tiêu hao thực nghiệm theo model và ước lượng bắc cầu.`,
+            `${rangeLabel} · ${formatNumber(Number(matrix.eligible_missions || 0))} eligible tasks; the primary coefficient is effective Codex 5-hour quota consumed until acceptance, while tokens are explanatory evidence. Each n is one complete task after related turns, models, and task types are attributed. Unconfirmed tasks are still included at lower confidence; ${formatNumber(Number(matrix.repair_attribution_samples || 0))} samples include cumulative repair-cost attribution. At least ${Number(matrix.minimum_samples || 3)} tasks are required for a direct value. The ${matrix.baseline_model || 'Sol High'} baseline for the same task type is preferred; directly measured quota is used first, then empirical model burn rate and bridged estimates.`,
         );
     }
+    initTableColumnResizers();
 }
 
-function taskOutcomeCategoryOptions(outcomes, mission) {
+function taskOutcomeCategoryEditor(outcomes, mission) {
     const automatic = !mission?.category_reviewed;
-    const autoLabel = `${uiText('Tự động', 'Automatic')} (${tr(mission?.category_label || 'Khác')})`;
-    return [
-        `<option value="auto" ${automatic ? 'selected' : ''}>${escapeHtml(autoLabel)}</option>`,
-        ...(outcomes?.categories || []).map(category => (
-            `<option value="${escapeHtml(category.key)}" ${!automatic && category.key === mission.category ? 'selected' : ''}>${escapeHtml(tr(category.label))}</option>`
-        )),
-    ].join('');
+    const selected = new Set(Array.isArray(mission?.categories) ? mission.categories : [mission?.category].filter(Boolean));
+    const anchor = escapeHtml(String(mission?.anchor_turn_id || ''));
+    const autoLabel = `${uiText('Tự động', 'Automatic')} (${(mission?.category_labels || [mission?.category_label || 'Khác']).map(label => tr(label)).join(' + ')})`;
+    const categoryChoices = (outcomes?.categories || []).map(category => `
+        <label class="task-category-choice">
+            <input type="checkbox" data-task-review-categories data-anchor="${anchor}" value="${escapeHtml(category.key)}"
+                ${!automatic && selected.has(category.key) ? 'checked' : ''}>
+            <span>${escapeHtml(tr(category.label))}</span>
+        </label>
+    `).join('');
+    return `<div class="task-category-editor" data-task-category-editor data-anchor="${anchor}">
+        <label class="task-category-choice is-auto">
+            <input type="checkbox" data-task-review-categories data-category-auto="1" data-anchor="${anchor}" value="auto" ${automatic ? 'checked' : ''}>
+            <span>${escapeHtml(autoLabel)}</span>
+        </label>
+        <div class="task-category-choice-grid">${categoryChoices}</div>
+    </div>`;
 }
 
 function taskOutcomeReviewOptions(mission) {
@@ -4389,6 +4483,34 @@ function taskOutcomeReviewOptions(mission) {
     ].join('');
 }
 
+function taskOutcomeRepairOptions(mission) {
+    const mode = String(mission?.repair_link_mode || 'auto');
+    const manualAnchor = String(mission?.repair_of_anchor_turn_id_override || '');
+    const currentModel = mission?.repair_original_model ? `: ${mission.repair_original_model}` : '';
+    const confidence = mission?.repair_link_confidence && mission.repair_link_confidence !== 'manual'
+        ? ` · tin cậy ${mission.repair_link_confidence}`
+        : '';
+    const options = [
+        `<option value="auto" ${mode === 'auto' ? 'selected' : ''}>Tự động${escapeHtml(currentModel + confidence)}</option>`,
+        `<option value="none" ${mode === 'none' ? 'selected' : ''}>Không phải lượt sửa</option>`,
+    ];
+    const seen = new Set();
+    for (const candidate of mission?.repair_link_candidates || []) {
+        const anchor = String(candidate?.anchor_turn_id || '');
+        if (!anchor || seen.has(anchor)) continue;
+        seen.add(anchor);
+        const model = String(candidate?.model_key || 'Không rõ model');
+        const date = candidate?.start_at ? formatDate(candidate.start_at) : '';
+        const title = String(candidate?.title || '').replace(/\s+/g, ' ').slice(0, 72);
+        const label = [model, date, title].filter(Boolean).join(' · ');
+        options.push(`<option value="${escapeHtml(anchor)}" ${mode === 'manual' && manualAnchor === anchor ? 'selected' : ''}>${escapeHtml(label)}</option>`);
+    }
+    if (mode === 'manual' && manualAnchor && !seen.has(manualAnchor)) {
+        options.push(`<option value="${escapeHtml(manualAnchor)}" selected>Liên kết đã lưu · ${escapeHtml(manualAnchor)}</option>`);
+    }
+    return options.join('');
+}
+
 function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
     const body = document.getElementById('task-outcome-audit-body');
     const count = document.getElementById('task-outcome-visible-count');
@@ -4397,12 +4519,17 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
     const search = String(document.getElementById('task-outcome-search')?.value || '').trim().toLocaleLowerCase(uiLocale());
     const missions = Array.isArray(outcomes?.missions) ? outcomes.missions : [];
     const filtered = missions.filter(mission => {
-        if (currentTaskOutcomeCategoryFilter !== 'all' && mission.category !== currentTaskOutcomeCategoryFilter) return false;
+        const missionCategories = Array.isArray(mission.categories) && mission.categories.length
+            ? mission.categories
+            : [mission.category].filter(Boolean);
+        if (currentTaskOutcomeCategoryFilter !== 'all' && !missionCategories.includes(currentTaskOutcomeCategoryFilter)) return false;
         if (currentTaskOutcomeStatusFilter !== 'all' && taskOutcomeStatusGroup(mission) !== currentTaskOutcomeStatusFilter) return false;
         if (currentTaskOutcomeRouteFilter === 'pure' && !mission.pure_model) return false;
         if (currentTaskOutcomeRouteFilter === 'mixed' && mission.pure_model) return false;
+        if (currentTaskOutcomeReviewFilter === 'hard' && !(mission.needs_review ?? mission.needs_category_review)) return false;
         if (search) {
-            const haystack = `${mission.title || ''} ${mission.route_label || ''} ${mission.category_label || ''}`.toLocaleLowerCase(uiLocale());
+            const categoryLabels = Array.isArray(mission.category_labels) ? mission.category_labels.join(' ') : (mission.category_label || '');
+            const haystack = `${mission.title || ''} ${mission.route_label || ''} ${categoryLabels} ${(mission.category_review_reasons || []).join(' ')}`.toLocaleLowerCase(uiLocale());
             if (!haystack.includes(search)) return false;
         }
         return true;
@@ -4418,6 +4545,33 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
             const statusGroup = taskOutcomeStatusGroup(mission);
             const confidence = taskOutcomeConfidence(mission);
             const mixed = !mission.pure_model;
+            const reviewReasonLabels = {
+                other_category: 'chưa xác định loại',
+                low_category_confidence: 'tin cậy phân loại thấp',
+                legacy_no_turn_detail: 'thiếu chi tiết theo lượt',
+                hard_turns: 'có lượt khó phân loại',
+                low_repair_link_confidence: 'liên kết lượt sửa chưa chắc',
+            };
+            const reviewReasons = (mission.category_review_reasons || []).map(reason => reviewReasonLabels[reason] || reason);
+            const reviewHint = (mission.needs_review ?? mission.needs_category_review)
+                ? `<div class="task-mission-subline task-review-warning">Cần xem lại: ${escapeHtml(reviewReasons.join(' · '))}</div>`
+                : '';
+            const repairHint = mission.repair_of_mission_id
+                ? `<div class="task-mission-subline">Sửa cho ${escapeHtml(mission.repair_original_model || 'model trước')} · ${formatNumber(Number(mission.repair_tokens || 0))} token${Number(mission.repair_penalty_tokens || 0) > 0 ? ` · phạt ${formatNumber(Number(mission.repair_penalty_tokens || 0))}` : ''}</div>`
+                : '';
+            const penaltyReceived = Number(mission.repair_penalty_received_tokens || 0);
+            const penaltyQuota = Number(mission.repair_penalty_received_quota_pct_5h || 0);
+            const penaltyHint = penaltyReceived > 0
+                ? `<div class="task-mission-subline task-repair-penalty">Phạt sửa lỗi +${formatNumber(penaltyReceived)} token${penaltyQuota > 0 ? ` · +${penaltyQuota.toFixed(2)}% hạn mức` : ''}</div>`
+                : '';
+            const chainModels = Array.isArray(mission.repair_chain_models) ? mission.repair_chain_models : [];
+            const chainHint = chainModels.length > 1
+                ? `<div class="task-mission-subline task-repair-chain">Chuỗi sửa: ${escapeHtml(chainModels.join(' → '))}</div>`
+                : '';
+            const quotaKnown = mission.quota_known === true && mission.quota_pct_5h != null;
+            const usageValue = quotaKnown
+                ? `<strong>${Number(mission.quota_pct_5h).toFixed(2)}% 5h</strong><div class="task-mission-subline">${formatNumber(Number(mission.total_tokens || 0))} token · ${mission.cost_known ? '$' + Number(mission.cost_usd || 0).toFixed(2) : 'phí chưa rõ'}</div>`
+                : `<strong>${formatNumber(Number(mission.total_tokens || 0))} token</strong><div class="task-mission-subline">chưa đo được hạn mức · ${mission.cost_known ? '$' + Number(mission.cost_usd || 0).toFixed(2) : 'phí chưa rõ'}</div>`;
             const turnDetails = (mission.turns || []).map((turn, index) => `
                 <li><strong>${uiText('Lượt', 'Turn')} ${index + 1}</strong> · ${escapeHtml(turn.model_key || uiText('Không rõ model', 'Unknown model'))} · ${formatNumber(Number(turn.total_tokens || 0))} token<br>${escapeHtml(turn.prompt || '')}</li>
             `).join('');
@@ -4425,16 +4579,17 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
                 <td>
                     <div class="task-mission-title">${escapeHtml(mission.title || '')}</div>
                     <div class="task-mission-subline">${escapeHtml(String(mission.id || ''))}${mission.reviewed ? uiText(' · đã hiệu chỉnh', ' · reviewed') : uiText(' · tự động', ' · automatic')}</div>
+                    ${reviewHint}
                     <details class="task-mission-turns"><summary>${uiText(`Xem ${Number(mission.turn_count || 0)} lượt làm việc`, `View ${Number(mission.turn_count || 0)} work turns`)}</summary><ol>${turnDetails}</ol></details>
                 </td>
-                <td><select class="task-review-select" data-task-review="category" data-anchor="${anchor}">${taskOutcomeCategoryOptions(outcomes, mission)}</select></td>
+                <td>${taskOutcomeCategoryEditor(outcomes, mission)}</td>
                 <td>
                     <span class="task-status-pill ${statusGroup}">${escapeHtml(taskOutcomeStatusLabel(mission))}</span>
                     <select class="task-review-select" data-task-review="outcome" data-anchor="${anchor}" style="margin-top:6px;">${taskOutcomeReviewOptions(mission)}</select>
                 </td>
-                <td><div class="task-route ${mixed ? 'task-route-mixed' : ''}">${escapeHtml(mission.route_label || uiText('Không rõ model', 'Unknown model'))}</div>${mission.has_delegated_work ? `<div class="task-mission-subline">${uiText(`Có ${Number(mission.delegated_turn_count || 0)} lượt subagent`, `${Number(mission.delegated_turn_count || 0)} subagent turns`)} · ${formatNumber(Number(mission.delegated_tokens || 0))} token</div>` : ''}</td>
+                <td><div class="task-route ${mixed ? 'task-route-mixed' : ''}">${escapeHtml(mission.route_label || uiText('Không rõ model', 'Unknown model'))}</div>${mission.has_delegated_work ? `<div class="task-mission-subline">${uiText(`Có ${Number(mission.delegated_turn_count || 0)} lượt subagent`, `${Number(mission.delegated_turn_count || 0)} subagent turns`)} · ${formatNumber(Number(mission.delegated_tokens || 0))} token</div>` : ''}${repairHint}${chainHint}<label class="task-repair-link"><span>${uiText('Nối lượt sửa với nhiệm vụ', 'Link repair turn to task')}</span><select class="task-review-select" data-task-review="repair_of_anchor_turn_id" data-anchor="${anchor}">${taskOutcomeRepairOptions(mission)}</select></label></td>
                 <td class="num"><strong>${Number(mission.turn_count || 0)}</strong> / ${Number(mission.correction_turns || 0)}</td>
-                <td class="num"><strong>${formatNumber(Number(mission.total_tokens || 0))}</strong><div class="task-mission-subline">${mission.cost_known ? '$' + Number(mission.cost_usd || 0).toFixed(2) : uiText('phí chưa rõ', 'cost unknown')}</div></td>
+                <td class="num">${usageValue}${penaltyHint}</td>
                 <td class="num">~${formatNumber(Number(mission.added_guidance_tokens_est || 0))}</td>
                 <td>${formatDate(mission.start_at)}</td>
                 <td><span class="task-confidence-pill ${confidence}">${confidence === 'high' ? uiText('Cao', 'High') : (confidence === 'medium' ? uiText('Vừa', 'Medium') : uiText('Thấp', 'Low'))}</span></td>
@@ -4452,10 +4607,11 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
             ? uiText(` Chỉ hiện 300/${formatNumber(filtered.length)} kết quả phù hợp.`, ` Showing only 300/${formatNumber(filtered.length)} matching results.`)
             : '';
         note.textContent = uiText(
-            `Đã lập chỉ mục ${formatNumber(Number(diagnostics.turns_indexed || 0))} lượt; gắn ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} lượt subagent vào nhiệm vụ cha. Tự động phân nhóm là gợi ý.${truncated}`,
-            `Indexed ${formatNumber(Number(diagnostics.turns_indexed || 0))} turns; attached ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} subagent turns to their parent tasks. Automatic grouping is a suggestion.${truncated}`,
+            `Đã lập chỉ mục ${formatNumber(Number(diagnostics.turns_indexed || 0))} lượt; gắn ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} lượt subagent vào nhiệm vụ cha. Hệ thống tự dùng cả mẫu chưa xác nhận với confidence thấp hơn; bộ lọc “Chỉ case khó” gom những mission/lượt còn mơ hồ để ưu tiên review, không bắt buộc duyệt từng mẫu.${truncated}`,
+            `Indexed ${formatNumber(Number(diagnostics.turns_indexed || 0))} turns; attached ${formatNumber(Number(diagnostics.delegated_turns_attached || 0))} subagent turns to their parent tasks. Unconfirmed samples are still used at lower confidence; the “Hard cases only” filter groups ambiguous missions/turns for prioritized review, so every sample does not need manual review.${truncated}`,
         );
     }
+    initTableColumnResizers();
 }
 
 function renderCodexTaskOutcomes(codexUsage) {
@@ -4498,6 +4654,7 @@ function initCodexTaskOutcomeControls() {
     const category = document.getElementById('task-outcome-category-filter');
     const status = document.getElementById('task-outcome-status-filter');
     const route = document.getElementById('task-outcome-route-filter');
+    const review = document.getElementById('task-outcome-review-filter');
     const search = document.getElementById('task-outcome-search');
     if (range) {
         range.value = currentTaskOutcomeRange;
@@ -4530,9 +4687,42 @@ function initCodexTaskOutcomeControls() {
             renderCodexTaskOutcomeAudit();
         });
     }
+    if (review) {
+        review.value = currentTaskOutcomeReviewFilter;
+        review.addEventListener('change', () => {
+            currentTaskOutcomeReviewFilter = ['all', 'hard'].includes(review.value) ? review.value : 'all';
+            saveUiPreferences({ taskOutcomeReviewFilter: currentTaskOutcomeReviewFilter });
+            renderCodexTaskOutcomeAudit();
+        });
+    }
     search?.addEventListener('input', () => renderCodexTaskOutcomeAudit());
 
     document.getElementById('task-outcome-audit-body')?.addEventListener('change', event => {
+        const categoryInput = event.target.closest('input[data-task-review-categories]');
+        if (categoryInput) {
+            const editor = categoryInput.closest('[data-task-category-editor]');
+            if (!editor) return;
+            const automatic = editor.querySelector('input[data-category-auto="1"]');
+            const manual = Array.from(editor.querySelectorAll('input[data-task-review-categories]:not([data-category-auto="1"])'));
+            if (categoryInput.dataset.categoryAuto === '1') {
+                if (categoryInput.checked) {
+                    manual.forEach(input => { input.checked = false; });
+                } else if (!manual.some(input => input.checked)) {
+                    categoryInput.checked = true;
+                    return;
+                }
+            } else if (categoryInput.checked && automatic) {
+                automatic.checked = false;
+            }
+            const categories = manual.filter(input => input.checked).map(input => input.value);
+            if (!categories.length && automatic) automatic.checked = true;
+            saveCodexTaskOutcomeReview({
+                action: 'review',
+                anchor_turn_id: categoryInput.dataset.anchor,
+                categories,
+            });
+            return;
+        }
         const select = event.target.closest('select[data-task-review]');
         if (!select) return;
         saveCodexTaskOutcomeReview({
@@ -4954,7 +5144,7 @@ function saveTableColumnWidths(storageKey, headers) {
 }
 
 function initTableColumnResizers() {
-    const tables = document.querySelectorAll('table.conv-table, table.models-breakdown-table, table.leaderboard-table, table.accounts-table, table#codex-quota-efficiency-table, table#codex-quota-per-task-table, table#codex-quota-efficiency-recent-table, table#codex-quota-per-task-recent-table');
+    const tables = document.querySelectorAll('table.conv-table, table.models-breakdown-table, table.leaderboard-table, table.accounts-table, table#codex-quota-efficiency-table, table#codex-quota-per-task-table, table#codex-quota-efficiency-recent-table, table#codex-quota-per-task-recent-table, table#task-outcome-matrix-table, table#task-outcome-audit-table');
     tables.forEach((table, tableIndex) => {
         const headers = Array.from(table.querySelectorAll('thead th'));
         const storageKey = getTableColumnWidthsStorageKey(table, tableIndex);
