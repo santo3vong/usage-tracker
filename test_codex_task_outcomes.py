@@ -759,6 +759,48 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(diagnostics_cell['sample_count'], 1)
         self.assertEqual(diagnostics_cell['median_total_tokens'], 50)
 
+    def test_recent_unfinished_tail_does_not_move_completed_mission_matrix(self):
+        mission = {
+            'id': 'live-tail', 'accepted': True, 'category': 'web',
+            'categories': ['web'], 'status': 'accepted_inferred',
+            'model_key': '5.6 sol xhigh', 'pure_model': True,
+            'total_tokens': 1000,
+            'correction_turns': 1, 'added_guidance_tokens_est': 0,
+            'first_pass_success': False, 'start_at': '2026-09-21T10:00:00+00:00',
+            'turns': [
+                {
+                    'turn_id': 'done', 'started_at': '2026-09-21T10:00:00+00:00',
+                    'completed': True, 'categories': ['web'], 'category': 'web',
+                    'total_tokens': 100, 'model_key': '5.6 sol xhigh',
+                    'cost_known': False,
+                    'model_totals': [{
+                        'model_key': '5.6 sol xhigh', 'total_tokens': 100,
+                        'cost_known': False, 'quota_known': True, 'quota_pct_5h': 1.0,
+                    }],
+                },
+                {
+                    'turn_id': 'active', 'started_at': '2026-09-21T10:30:00+00:00',
+                    'completed': False, 'categories': ['web'], 'category': 'web',
+                    'total_tokens': 900, 'model_key': '5.6 sol xhigh',
+                    'cost_known': False,
+                    'model_totals': [{
+                        'model_key': '5.6 sol xhigh', 'total_tokens': 900,
+                        'cost_known': False, 'quota_known': True, 'quota_pct_5h': 9.0,
+                    }],
+                },
+            ],
+        }
+        now = datetime(2026, 9, 21, 11, 0, tzinfo=timezone.utc)
+        samples = server._codex_matrix_attributed_samples([mission], now=now)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]['total_tokens'], 100)
+        self.assertEqual(samples[0]['total_quota_pct_5h'], 1.0)
+
+        mission['turns'][-1]['completed'] = True
+        completed = server._codex_matrix_attributed_samples([mission], now=now)
+        self.assertEqual(completed[0]['total_tokens'], 1000)
+        self.assertEqual(completed[0]['total_quota_pct_5h'], 10.0)
+
     def test_short_followups_inherit_previous_turn_category_inside_mixed_mission(self):
         turns = [
             turn('t1', 'thread-mixed', '2026-09-10T10:00:00+00:00',
@@ -1043,6 +1085,18 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertFalse(server._codex_is_quota_accounting_question(
             'bạn làm tiếp đi, thêm nữa hệ số hạn mức có phải thay đổi đúng ko'
         ))
+        self.assertTrue(server._codex_is_quota_accounting_question(
+            'ủa sao điều chỉnh rồi mà Sol XHigh lại tăng mạnh thế'
+        ))
+        self.assertTrue(server._codex_is_quota_accounting_question(
+            'bạn đã cộng khoản phạt này cho ChatGPT Web chưa'
+        ))
+        categories, primary, _, _ = server._codex_task_categories(
+            'ủa sao điều chỉnh rồi mà Sol XHigh lại tăng mạnh thế',
+            r'C:\work\usage-tracker',
+        )
+        self.assertEqual(categories, ['research'])
+        self.assertEqual(primary, 'research')
 
     def test_cross_thread_repair_without_explicit_reference_is_not_auto_linked(self):
         turns = [

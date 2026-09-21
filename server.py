@@ -5698,6 +5698,12 @@ def _codex_task_categories(text, cwd=''):
     if tracker_classifier_work:
         scores = {'web': 3}
 
+    # Questions about the tracker/model numbers themselves are analysis work.
+    # Do not let the Usage Tracker workspace path turn them into web-development
+    # samples; implementation follow-ups are classified independently per turn.
+    if _codex_is_quota_accounting_question(prompt_text):
+        scores = {'research': 3}
+
     if not scores:
         return ['other'], 'other', 'low', False
 
@@ -5805,13 +5811,31 @@ def _codex_is_quota_accounting_question(text):
         'ban lam tiep', 'lam tiep', 'tiep tuc', 'ban tiep tuc', 'sao ban dung',
     )):
         return False
-    return bool(
-        any(term in clean for term in ('han muc', 'token', 'chi phi', 'credit')) and
+    question_signal = bool(
         any(term in clean for term in (
-            'bi tru', 'cong vao', 'tinh vao', 'tieu hao', 'ton hon', 'he so',
-        )) and
-        (clean.endswith(' nhi') or clean.endswith(' ko') or clean.endswith(' khong'))
+            'tai sao', 'vi sao', 'sao ', 'co phai', 'dung ko', 'dung khong',
+        )) or
+        re.search(r'\b(?:chua\w*|nhi|the|ko|khong)$', clean)
     )
+    quota_metric = any(term in clean for term in (
+        'han muc', 'token', 'chi phi', 'credit', 'khoan phat',
+        'phat sua loi', 'repair penalty', 'he so',
+    ))
+    accounting_action = any(term in clean for term in (
+        'bi tru', 'cong vao', 'da cong', 'tinh vao', 'tieu hao', 'ton hon',
+        'tang manh', 'giam manh', 'tang len', 'giam xuong', 'cao hon', 'thap hon',
+    ))
+    model_movement = (
+        any(term in clean for term in (
+            'sol high', 'sol xhigh', 'sol extra high', 'astra', 'luna',
+            'gpt-5.5', 'gpt 5.5', 'chatgpt web', 'model',
+        )) and
+        any(term in clean for term in (
+            'tang manh', 'giam manh', 'tang len', 'giam xuong',
+            'cao hon', 'thap hon', 'ton hon', 'tieu hao',
+        ))
+    )
+    return bool(question_signal and ((quota_metric and accounting_action) or model_movement))
 
 
 def _codex_assistant_completion_signal(text):
@@ -7385,7 +7409,10 @@ def _codex_collect_unconfirmed_groups(missions):
     )
 
 
-def _codex_matrix_attributed_samples(missions):
+def _codex_matrix_attributed_samples(missions, now=None):
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
     usable = [mission for mission in missions if _codex_mission_usable_for_matrix(mission)]
     synthetic_ids = {
         id(mission): f'legacy-mission-{index}'
@@ -7515,8 +7542,24 @@ def _codex_matrix_attributed_samples(missions):
         category_reviewed = bool(mission.get('category_reviewed')) and not separate_repair
         contribution_count = 0
 
-        for turn in mission.get('turns') or []:
+        mission_turns = list(mission.get('turns') or [])
+        skipped_provisional_tail = False
+        for turn_index, turn in enumerate(mission_turns):
             if not isinstance(turn, dict):
+                continue
+            # The session log exposes token movement while the current answer is
+            # still being generated.  Keep interrupted historical attempts once
+            # a later turn exists, but do not let the live unfinished tail move a
+            # completed-mission median before that answer has finished.
+            started_at = _parse_iso_utc(turn.get('started_at'))
+            provisional_tail = bool(
+                turn_index == len(mission_turns) - 1 and
+                turn.get('completed') is False and
+                started_at is not None and
+                timedelta(0) <= now_utc - started_at <= timedelta(hours=6)
+            )
+            if provisional_tail:
+                skipped_provisional_tail = True
                 continue
             turn_tokens = _safe_nonnegative_int(turn.get('total_tokens'))
             if turn_tokens <= 0:
@@ -7576,7 +7619,7 @@ def _codex_matrix_attributed_samples(missions):
                     contribution_count += 1
 
         # Legacy/manual mission fixtures may not contain turn detail.
-        if contribution_count == 0:
+        if contribution_count == 0 and not skipped_provisional_tail:
             category_weight = 1.0 / len(base_categories)
             model_totals = [
                 item for item in (mission.get('quota_model_totals') or mission.get('model_totals') or [])
@@ -7682,7 +7725,7 @@ def _codex_matrix_attributed_samples(missions):
 def _codex_task_matrix(missions, range_days, now_utc):
     cutoff = None if range_days is None else now_utc - timedelta(days=range_days)
     bridge_missions = [mission for mission in missions if _codex_mission_usable_for_matrix(mission)]
-    bridge_eligible = _codex_matrix_attributed_samples(bridge_missions)
+    bridge_eligible = _codex_matrix_attributed_samples(bridge_missions, now=now_utc)
     eligible = []
     for sample in bridge_eligible:
         started = _parse_iso_utc(sample.get('start_at'))

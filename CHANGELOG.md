@@ -23,6 +23,8 @@ All notable public changes to Usage Tracker will be documented here.
 ### Fixed
 
 - Prevented quota/cost questions from being mistaken for repair work.
+- Prevented the live unfinished tail of the current answer from moving completed-mission matrix medians; the usage enters the matrix after the turn finishes.
+- Classified questions about model ratios, quota penalties, and sudden efficiency changes as research instead of inheriting the Usage Tracker web-project label.
 - Prevented phrases such as “do not use old data,” “CPU is not fully used,” or “not pushed to GitHub yet” from creating false repair links.
 - Restored complete Vietnamese/English translation of dynamically rendered task-outcome controls and status labels.
 
