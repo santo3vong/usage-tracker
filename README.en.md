@@ -37,7 +37,7 @@ The tracker avoids relying on a single total token column, as an isolated number
 
 Combining both metrics provides early warnings when a task exhibits abnormal burn rates while maintaining an empirical baseline to guide model selection.
 
-![Model breakdown and real usage cost view]<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
+<img width="1713" height="945" alt="Model breakdown and real usage cost view" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
 <img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
 
 ## Task-to-Quota Correlation Matrix
@@ -50,13 +50,14 @@ Evaluating models solely by instantaneous burn rate or single-turn token consump
   * Lightweight models or low-effort profiles (e.g., GPT-5.5 Low, Sol High) appear cheap per turn. However, if the model struggles to grasp requirements, you must repeatedly explain, intervene, and correct incomplete code. Context accumulates across each turn, inflating cumulative token consumption for the overall mission.
   * Conversely, a more capable model (e.g., 5.6 Sol Extra High) incurs a higher per-turn cost, but its reasoning depth often resolves the issue in 1–2 turns without repetitive re-teaching. Across the entire mission lifecycle, total token consumption can actually end up lower.
 
-Therefore, the tracker transitions from single-turn evaluations to measuring **total tokens consumed to complete a mission**.
+The tracker therefore evaluates the full amount of usage required to complete a mission. Raw tokens remain available for auditing, while the matrix's primary ratio uses measured Codex five-hour quota consumption. Bridged or estimated values retain their provenance and confidence.
 
 ### b. Data Collection and Aggregation Logic
 Aggregating data from historical task runs:
 
 * **Single-shot completions:** When a model finishes the task in one attempt with no follow-up revisions required, token usage is captured directly from that session/turn.
-* **Multi-turn revisions:** When intervention is needed—including prompt re-teaching, bug fixing, and logic adjustments until the output is accepted—the tracker sums the tokens across all related turns to compute **Total Tokens / Mission**.
+* **Multi-turn revisions:** When intervention is needed—including prompt re-teaching, bug fixing, and logic adjustments until the output is accepted—the tracker accounts for every related turn.
+* **Cross-model repairs:** A repair stays as its own mission so the repair model keeps its actual usage. That same usage is also charged as a penalty to the model whose failed result required the repair. In a longer repair chain, later repair cost propagates to the failed upstream links instead of collapsing the whole chain into one mixed-model mission.
 
 ### c. 2D Matrix Structure
 A 2D matrix quantifies the capability and actual cost profile of each `Model + Effort` configuration across specific workloads:
@@ -68,16 +69,17 @@ A 2D matrix quantifies the capability and actual cost profile of each `Model + E
   * *(Other domain-specific workflows...)*
 * **Columns (Model + Effort):** Benchmarked model configurations (GPT-5.5 Low/High/XHigh, Sol High/XHigh, Astra...).
 * **Normalized Baseline:** `Sol High` serves as the `1.00x` baseline.
-  * Cell values reflect the relative ratio based on total tokens consumed to complete the mission.
-  * Ratio `< 1.00x`: More token-efficient than Sol High on that task type.
-  * Ratio `> 1.00x`: Higher token consumption than Sol High.
+  * Cell values primarily reflect five-hour quota consumed to complete a mission in the same task category.
+  * Ratio `< 1.00x`: Lower five-hour quota consumption than Sol High.
+  * Ratio `> 1.00x`: Higher five-hour quota consumption than Sol High.
+  * Raw-token ratios remain supporting evidence. A value is bridged only when a supported comparison path exists, and the UI marks its provenance and confidence.
 * **Handling Missing Data:** Combinations that have not yet been benchmarked explicitly display `No data` rather than interpolating or defaulting to 0.
 
-### d. Key Takeaways & Planned UI Enhancements
+### d. Key Takeaways & UI Behavior
 * **Quantitative Model Selection:** The matrix provides concrete data on when lighter models are sufficient to conserve quota, and when high-capability models are necessary upfront to prevent costly re-teaching loops.
-* **Persistent UI Settings:** Save the user's latest filter, model, and category selections in browser storage (`localStorage`) to avoid resetting on every launch.
+* **Persistent UI Settings:** Language, filters, models, date ranges, chart units, table sizes, and column widths are retained in browser storage (`localStorage`) between launches.
 
-![Quota per task demo]<img width="1757" height="687" alt="Ảnh chụp màn hình 2026-09-17 083012" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
+<img width="1757" height="687" alt="Quota by task-type matrix" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
 
 ## Automated Mission Grouping Is Only a Suggestion
 
@@ -90,6 +92,8 @@ Mission grouping relies on heuristics, which can misjudge mission boundaries or 
 - Revert boundaries back to the automated heuristic.
 
 Automation reduces review friction, but an automated inference is never treated as ground truth simply because it was machine-generated.
+
+Automatic rules are intentionally limited to strong evidence: an immediate same-task correction, a model switch that fixes that correction, a separate quota/cost accounting question, or a new request after a long gap. An explicit “continue” prompt still resumes the previous mission. A substantial new request that merely contains a generic follow-up phrase after a long gap starts a new mission. Cross-task repair links require an explicit reference to the earlier task or manual review.
 
 ## From Estimated Quota to Live Quota
 
@@ -138,3 +142,74 @@ From the repository root:
 
 ```powershell
 .\start.bat
+```
+
+Or start the server without opening a browser:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-background.ps1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:5051/
+```
+
+Stop or restart the server with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\stop-server.ps1
+powershell -ExecutionPolicy Bypass -File .\restart-server.ps1
+```
+
+The managed PID and runtime logs are stored under `runtime/`.
+
+## Accuracy and Interpreting the Data
+
+Dashboard values do not all have the same certainty. Read the source/provenance shown with each metric:
+
+- **Live / exact:** read directly from a local source that exposes the value.
+- **Log-derived:** computed from local sessions or transcripts.
+- **Estimated / inferred:** derived from observations or a proxy.
+- **Manual / configured:** supplied by the user or retained as a fallback.
+
+Cost and quota-capacity estimates are analysis aids, not official billing records. Task-outcome classification and mission grouping are heuristic, so high-impact or sparse comparisons should be reviewed before they are used as benchmarks.
+
+## Local Data and Privacy
+
+The following files are intentionally excluded by `.gitignore`:
+
+- `accounts.json`
+- `codex_usage.json`
+- `codex_models_cache.json`
+- `codex_mission_turns_cache.json`
+- `codex_mission_reviews.json`
+- `quota_observations.json`
+- `real_quotas.json`
+- `time_series_history.json`
+- `data.js`
+- `runtime/`
+- `runtime_backups/`
+
+They may contain account identifiers, prompts, local paths, usage history, or other machine-local data. **Do not use `git add -f` to place these files in a public commit without reviewing their contents.**
+
+The public repository does not require private projects, personal prompt history, or private trading data. Images under `docs/screenshots/` use synthetic tasks and values to demonstrate the interface.
+
+## Development and Validation
+
+```powershell
+node --check app.js
+node --check i18n.js
+python -B -m unittest discover -v
+python -B -m py_compile server.py run_server.py
+git diff --check
+```
+
+The test suite covers usage sources, quota estimation, the model catalog, Codex task outcomes, and live Codex app-server rate-limit handling. GitHub Actions run the core checks on Windows.
+
+## Contributing, Security, and License
+
+See `CONTRIBUTING.md` for the development and pull-request workflow. Use `SECURITY.md` for security or privacy reports.
+
+License: MIT. See `LICENSE`.

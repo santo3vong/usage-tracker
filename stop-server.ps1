@@ -5,7 +5,8 @@ $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path -LiteralPath $PSScriptRoot).Path
 $runner = (Resolve-Path -LiteralPath (Join-Path $repo "run_server.py")).Path
 $pidFile = Join-Path $repo "runtime\server.pid"
-$url = "http://127.0.0.1:5050/"
+$port = 5051
+$url = "http://127.0.0.1:$port/"
 
 function Test-CanonicalTrackerProcess {
     param(
@@ -34,31 +35,50 @@ function Test-CanonicalTrackerProcess {
     }
 }
 
-if (-not (Test-Path -LiteralPath $pidFile -PathType Leaf)) {
-    $listener = Get-NetTCPConnection -LocalPort 5050 -State Listen -ErrorAction SilentlyContinue
-    if (-not $listener) {
-        Write-Output "No managed Usage Tracker PID file or port 5050 listener was found."
-        exit 0
+$savedPid = $null
+if (Test-Path -LiteralPath $pidFile -PathType Leaf) {
+    $rawPid = (Get-Content -LiteralPath $pidFile -Raw).Trim()
+    if ($rawPid -match '^\d+$') {
+        $savedPid = [int]$rawPid
+    } else {
+        Remove-Item -LiteralPath $pidFile -Force
+        Write-Output "Invalid managed PID file removed."
     }
-    $listenerPid = @($listener | Select-Object -ExpandProperty OwningProcess -Unique)[0]
+}
+
+$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+$listenerPid = if ($listener) { @($listener | Select-Object -ExpandProperty OwningProcess -Unique)[0] } else { $null }
+$serverPid = $null
+$process = $null
+
+if ($listenerPid) {
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$listenerPid" -ErrorAction SilentlyContinue
     if (-not (Test-CanonicalTrackerProcess -ProcessId $listenerPid -ProcessInfo $listenerProcess)) {
-        throw "Port 5050 is occupied by PID $listenerPid, but it cannot be verified as this Usage Tracker checkout. It was not stopped."
+        throw "Port $port is occupied by PID $listenerPid, but it cannot be verified as this Usage Tracker checkout. It was not stopped."
     }
-    Set-Content -LiteralPath $pidFile -Value $listenerPid -Encoding ascii
-    Write-Output "Recovered managed Usage Tracker PID $listenerPid from port 5050."
+    $serverPid = [int]$listenerPid
+    $process = $listenerProcess
+    if ($savedPid -ne $serverPid) {
+        Set-Content -LiteralPath $pidFile -Value $serverPid -Encoding ascii
+        Write-Output "Recovered managed Usage Tracker PID $serverPid from port $port."
+    }
+} elseif ($savedPid) {
+    $savedProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$savedPid" -ErrorAction SilentlyContinue
+    if ($savedProcess) {
+        if (-not (Test-CanonicalTrackerProcess -ProcessId $savedPid -ProcessInfo $savedProcess)) {
+            throw "PID $savedPid does not belong to this Usage Tracker checkout. It was not stopped."
+        }
+        $serverPid = $savedPid
+        $process = $savedProcess
+    } else {
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+        Write-Output "The saved process is no longer running; stale PID file removed."
+    }
 }
 
-$serverPid = [int](Get-Content -LiteralPath $pidFile -Raw)
-$process = Get-CimInstance Win32_Process -Filter "ProcessId=$serverPid" -ErrorAction SilentlyContinue
-if (-not $process) {
-    Remove-Item -LiteralPath $pidFile -Force
-    Write-Output "The saved process is no longer running; stale PID file removed."
+if (-not $serverPid -or -not $process) {
+    Write-Output "No running Usage Tracker process for this checkout was found."
     exit 0
-}
-
-if (-not (Test-CanonicalTrackerProcess -ProcessId $serverPid -ProcessInfo $process)) {
-    throw "PID $serverPid does not belong to this Usage Tracker checkout. It was not stopped."
 }
 
 Stop-Process -Id $serverPid

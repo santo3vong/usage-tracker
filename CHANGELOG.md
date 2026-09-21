@@ -2,6 +2,30 @@
 
 All notable public changes to Usage Tracker will be documented here.
 
+## [Unreleased]
+
+### Added
+
+- Resizable table viewports and persistent per-column widths across the dashboard.
+- Grouped review filters for unresolved missions and soft-audit signals.
+- Repair-chain accounting that keeps the repair model's own usage while charging the same quota cost as a penalty to the model whose result required the repair.
+- Historical mission-boundary reasons and automatic separation of cross-model repairs, quota-accounting questions, and new actions after a model handoff.
+
+### Changed
+
+- Reprocessed historical Codex missions with accent-aware repair detection, long-gap boundaries, and safer same-thread repair matching.
+- A same-thread repair immediately after the failed mission is preferred; cross-thread repairs require an explicit task reference or manual review.
+- Explicit resume prompts still continue the prior mission after a long interruption, while a substantial new request containing only a generic follow-up phrase starts a new mission.
+- Mission comparisons prioritize measured 5-hour quota consumption; raw-token ratios remain supporting evidence with provenance and confidence labels.
+- UI selections, chart ranges, language, table sizes, and column widths persist locally between launches.
+- The public checkout uses port `5051`, with safer start/stop handling for stale PID files and unrelated port owners.
+
+### Fixed
+
+- Prevented quota/cost questions from being mistaken for repair work.
+- Prevented phrases such as “do not use old data,” “CPU is not fully used,” or “not pushed to GitHub yet” from creating false repair links.
+- Restored complete Vietnamese/English translation of dynamically rendered task-outcome controls and status labels.
+
 ## [0.2.1] - 2026-09-16
 
 ### Documentation

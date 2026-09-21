@@ -8,7 +8,8 @@ import server
 
 
 def turn(turn_id, thread_id, at, prompt, model='5.6 sol high', parent='', subagent=False,
-         completed=True, assistant_messages=1, cwd=r'C:\work'):
+         completed=True, assistant_messages=1, cwd=r'C:\work', assistant_text='',
+         tool_calls=0, tool_successes=0, tool_failures=0, task_error=''):
     return {
         'turn_id': turn_id,
         'thread_id': thread_id,
@@ -23,6 +24,11 @@ def turn(turn_id, thread_id, at, prompt, model='5.6 sol high', parent='', subage
         'user_tokens_est': server.estimate_tokens(prompt),
         'user_message_count': 1,
         'assistant_message_count': assistant_messages,
+        'assistant_text': assistant_text,
+        'tool_call_count': tool_calls,
+        'tool_success_count': tool_successes,
+        'tool_failure_count': tool_failures,
+        'task_error': task_error,
     }
 
 
@@ -41,6 +47,24 @@ def usage(turn_id, model, total, at):
 
 
 class CodexTaskOutcomeTests(unittest.TestCase):
+    def test_tool_output_failure_parser_uses_explicit_result_evidence(self):
+        self.assertFalse(server._codex_tool_output_failed('Process exited with code 0'))
+        self.assertTrue(server._codex_tool_output_failed('Process exited with code 1'))
+        self.assertTrue(server._codex_tool_output_failed({'isError': True}))
+        self.assertTrue(server._codex_tool_output_failed({'exit_code': 2}))
+
+    def test_delegation_envelope_is_recognized_as_subagent_from_cached_turn(self):
+        raw = turn(
+            'delegated', 'worker-thread', '2026-09-10T10:00:00+00:00',
+            '<codex_delegation><source_thread_id>parent-thread</source_thread_id>'
+            '<input>continue the task</input></codex_delegation>',
+        )
+        logical = server._expand_codex_mission_turn(raw)
+        self.assertEqual(len(logical), 1)
+        self.assertTrue(logical[0]['is_subagent'])
+        self.assertEqual(logical[0]['thread_source'], 'subagent')
+        self.assertEqual(logical[0]['parent_thread_id'], 'parent-thread')
+
     def test_aborted_no_response_turn_does_not_contaminate_model_route(self):
         turns = [
             turn('ghost', 'thread-a', '2026-09-05T01:08:32+00:00',
@@ -68,6 +92,68 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertTrue(first['pure_model'])
         self.assertEqual(first['turn_count'], 1)
         self.assertNotIn('ghost', first['turn_ids'])
+
+    def test_usage_only_turn_without_model_response_is_excluded_from_model_evaluation(self):
+        turns = [
+            turn(
+                'quota-stop', 'thread-a', '2026-09-16T19:15:20+00:00',
+                'Sửa lỗi Excel Mobile rồi lưu lại file.', model='chatgpt-web/high high',
+                completed=False, assistant_messages=0,
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [usage('quota-stop', 'chatgpt-web/high high', 120, '2026-09-16T19:15:30+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 17, tzinfo=timezone.utc),
+        )
+
+        mission = result['missions'][0]
+        self.assertEqual(mission['status'], 'excluded_no_response_auto')
+        self.assertEqual(mission['infrastructure_exclusion_reason'], 'no_model_response')
+        self.assertFalse(server._codex_mission_usable_for_matrix(mission))
+
+    def test_explicit_zero_tool_infrastructure_block_is_excluded(self):
+        turns = [
+            turn(
+                'bridge-stop', 'thread-a', '2026-09-16T20:00:00+00:00',
+                'Bạn sửa trực tiếp workbook đi.', model='chatgpt-web/high high',
+                assistant_text=(
+                    'Hiện tại tôi chưa có kênh công cụ thao tác file nên không thể sửa trực tiếp. '
+                    'Bạn cần mở lại task có quyền workspace.'
+                ),
+                task_error='stream disconnected before completion: launcher browser control channel failed',
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, [],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 17, tzinfo=timezone.utc),
+        )
+
+        mission = result['missions'][0]
+        self.assertEqual(mission['status'], 'excluded_infrastructure_auto')
+        self.assertEqual(mission['infrastructure_exclusion_reason'], 'tool_or_bridge_unavailable')
+
+    def test_successful_tool_work_is_not_auto_excluded_by_later_harness_wording(self):
+        turns = [
+            turn(
+                'worked', 'thread-a', '2026-09-16T20:10:00+00:00',
+                'Sửa trực tiếp workbook rồi kiểm tra.', model='chatgpt-web/high high',
+                assistant_text='Tôi đã đọc file, nhưng lượt sau chưa có kênh công cụ thao tác để hoàn tất.',
+                tool_calls=1, tool_successes=1,
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [usage('worked', 'chatgpt-web/high high', 80, '2026-09-16T20:10:10+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 17, tzinfo=timezone.utc),
+        )
+
+        mission = result['missions'][0]
+        self.assertFalse(mission['status'].startswith('excluded'))
+        self.assertFalse(mission['infrastructure_blocked'])
 
     def test_independent_git_and_model_reasoning_prompts_form_new_missions(self):
         turns = [
@@ -150,6 +236,27 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(learned['total_tokens'], 180)
         self.assertGreater(learned['added_guidance_tokens_est'], 0)
         self.assertTrue(learned['pure_model'])
+
+    def test_explicit_acceptance_without_model_response_is_still_used(self):
+        turns = [
+            turn(
+                'answer', 'thread-a', '2026-09-01T10:00:00+00:00',
+                'lần trước tôi đã huấn luyện chọn TP2 tới tuần nào',
+                assistant_text='Mốc đúng là W30; W31 đã phân tích nhưng chưa được xác nhận.',
+            ),
+            turn(
+                'confirmation', 'thread-a', '2026-09-01T10:05:00+00:00',
+                'ok đúng rồi đấy', completed=False, assistant_messages=0,
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [usage('answer', '5.6 sol high', 100, '2026-09-01T10:01:00+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(len(result['missions']), 1)
+        self.assertEqual(result['missions'][0]['status'], 'accepted_explicit')
 
     def test_matrix_uses_same_category_sol_high_baseline(self):
         missions = []
@@ -281,6 +388,258 @@ class CodexTaskOutcomeTests(unittest.TestCase):
                 review['categories'],
                 ['documents', 'system_diagnostics', 'software_debugging'],
             )
+
+    def test_manual_category_review_clears_low_confidence_turn_review(self):
+        turns = [turn(
+            'vague', 'thread-vague', '2026-09-10T10:00:00+00:00',
+            'ok bạn làm tiếp đi',
+        )]
+        reviews = {
+            'version': 1, 'turn_boundaries': {},
+            'missions': {'vague': {'categories': ['documents'], 'category': 'documents'}},
+        }
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [usage('vague', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+            reviews=reviews,
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        mission = result['missions'][0]
+        self.assertTrue(mission['category_reviewed'])
+        self.assertFalse(mission['needs_category_review'])
+        self.assertEqual(result['summary']['review_case_count'], 0)
+
+    def test_vague_new_thread_uses_final_assistant_conclusion_for_category(self):
+        item = turn(
+            'vague', 'thread-vague', '2026-09-10T10:00:00+00:00',
+            'ok bạn làm đi',
+            assistant_text='Đã sửa xong Usage Tracker dashboard và kiểm tra HTML, CSS, JavaScript.',
+        )
+        result = server.build_codex_task_outcomes(
+            {'turns': [item], 'diagnostics': {}},
+            [usage('vague', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        mission = result['missions'][0]
+        self.assertEqual(mission['category'], 'web')
+        self.assertEqual(mission['category_confidence'], 'medium')
+        self.assertTrue(mission['turns'][0]['category_from_assistant'])
+        self.assertFalse(mission['needs_category_review'])
+
+    def test_vague_next_mission_inherits_previous_same_thread_category(self):
+        turns = [
+            turn('web', 'thread-one', '2026-09-10T10:00:00+00:00', 'sửa web usage tracker'),
+            turn('accept', 'thread-one', '2026-09-10T10:05:00+00:00', 'ok tốt rồi'),
+            turn('next', 'thread-one', '2026-09-10T10:10:00+00:00', 'ok bạn làm tiếp đi'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [
+                usage('web', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+                usage('next', '5.6 sol high', 50, '2026-09-10T10:11:00+00:00'),
+            ],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        missions = {mission['anchor_turn_id']: mission for mission in result['missions']}
+        self.assertEqual(missions['next']['category'], 'web')
+        self.assertTrue(missions['next']['turns'][0]['category_inherited'])
+        self.assertFalse(missions['next']['needs_category_review'])
+
+    def test_vague_continuation_uses_previous_category_over_assistant_process_text(self):
+        turns = [
+            turn('cockpit', 'thread-cockpit', '2026-09-10T10:00:00+00:00',
+                 'xây dựng mô phỏng 3d buồng lái'),
+            turn('accept', 'thread-cockpit', '2026-09-10T10:05:00+00:00', 'ok tốt rồi'),
+            turn(
+                'next', 'thread-cockpit', '2026-09-10T10:10:00+00:00',
+                'bạn test gì mà lâu thế',
+                assistant_text='Tôi đang kiểm tra quy trình và sẽ báo cáo kết quả nghiên cứu.',
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [
+                usage('cockpit', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+                usage('next', '5.6 sol high', 50, '2026-09-10T10:11:00+00:00'),
+            ],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        missions = {mission['anchor_turn_id']: mission for mission in result['missions']}
+        self.assertEqual(missions['next']['categories'], ['simulation_3d'])
+        self.assertTrue(missions['next']['turns'][0]['category_inherited'])
+        self.assertFalse(missions['next']['needs_category_review'])
+
+    def test_vague_opening_turn_backfills_from_later_concrete_work(self):
+        turns = [
+            turn('vague', 'thread-forward', '2026-09-10T10:00:00+00:00',
+                 'bạn có xem được nội dung đoạn chat đó không'),
+            turn('concrete', 'thread-forward', '2026-09-10T10:05:00+00:00',
+                 'hãy phân tích bộ filter GBPUSD trong đoạn chat đó'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [
+                usage('vague', '5.6 sol high', 50, '2026-09-10T10:01:00+00:00'),
+                usage('concrete', '5.6 sol high', 100, '2026-09-10T10:06:00+00:00'),
+            ],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        mission = result['missions'][0]
+        self.assertNotIn('other', mission['categories'])
+        self.assertEqual(mission['turns'][0]['category'], 'trading_setup')
+        self.assertTrue(mission['turns'][0]['category_inherited'])
+        self.assertFalse(mission['needs_category_review'])
+
+    def test_review_file_can_exclude_non_task_from_matrix_and_review_queues(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'reviews.json')
+            server.update_codex_mission_review({
+                'action': 'review', 'anchor_turn_id': 'greeting-turn',
+                'outcome': 'excluded',
+            }, path)
+            reviews = server.load_codex_mission_reviews(path)
+            self.assertEqual(reviews['missions']['greeting-turn']['outcome'], 'excluded')
+
+            turns = [
+                turn('greeting-turn', 'thread-greeting', '2026-09-10T10:00:00+00:00',
+                     'ghi chú thử không thuộc nhiệm vụ cần so sánh'),
+            ]
+            events = [usage(
+                'greeting-turn', '5.6 sol high', 100,
+                '2026-09-10T10:01:00+00:00',
+            )]
+            result = server.build_codex_task_outcomes(
+                {'turns': turns, 'diagnostics': {}}, events,
+                reviews=reviews,
+                now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            )
+            mission = result['missions'][0]
+            self.assertEqual(mission['status'], 'excluded_manual')
+            self.assertTrue(mission['outcome_reviewed'])
+            self.assertFalse(mission['accepted'])
+            self.assertFalse(mission['needs_review'])
+            self.assertFalse(mission['audit_needed'])
+            self.assertEqual(result['summary']['excluded_count'], 1)
+            self.assertEqual(result['summary']['unresolved_count'], 0)
+            self.assertEqual(result['summary']['review_case_count'], 0)
+            self.assertEqual(result['matrices']['all']['eligible_missions'], 0)
+
+    def test_review_file_keeps_inferred_acceptance_distinct_from_direct_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'reviews.json')
+            server.update_codex_mission_review({
+                'action': 'review', 'anchor_turn_id': 'old-question',
+                'outcome': 'inferred',
+            }, path)
+            reviews = server.load_codex_mission_reviews(path)
+            self.assertEqual(reviews['missions']['old-question']['outcome'], 'inferred')
+
+            result = server.build_codex_task_outcomes(
+                {'turns': [turn(
+                    'old-question', 'thread-question', '2026-09-10T10:00:00+00:00',
+                    'hạn mức codex go so với codex free có khác nhau không',
+                )], 'diagnostics': {}},
+                [usage(
+                    'old-question', '5.6 sol high', 100,
+                    '2026-09-10T10:01:00+00:00',
+                )],
+                reviews=reviews,
+                now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            )
+            mission = result['missions'][0]
+            self.assertEqual(mission['status'], 'accepted_inferred_review')
+            self.assertEqual(mission['status_confidence'], 'medium')
+            self.assertTrue(mission['accepted'])
+            self.assertTrue(mission['outcome_reviewed'])
+            self.assertEqual(result['summary']['accepted_count'], 1)
+            self.assertEqual(result['summary']['unresolved_count'], 0)
+
+    def test_completed_informational_answer_is_inferred_without_manual_review(self):
+        question = turn(
+            'question', 'thread-question', '2026-09-10T10:00:00+00:00',
+            'tôi muốn hỏi cache hit là gì và có tốn hạn mức không',
+            assistant_text='Cache hit là phần ngữ cảnh đã có trong bộ nhớ đệm. Nó vẫn được tính theo cơ chế của dịch vụ.',
+        )
+        result = server.build_codex_task_outcomes(
+            {'turns': [question], 'diagnostics': {}},
+            [usage('question', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        mission = result['missions'][0]
+        self.assertEqual(mission['status'], 'accepted_inferred')
+        self.assertTrue(mission['accepted'])
+        self.assertFalse(mission['outcome_reviewed'])
+
+    def test_completion_claim_with_required_real_device_check_stays_unresolved(self):
+        item = turn(
+            'mobile-fix', 'thread-mobile', '2026-09-10T10:00:00+00:00',
+            'sửa công thức Excel để chạy trên điện thoại',
+            assistant_text=(
+                'Đã sửa xong công thức trên file. Tuy nhiên chưa trực tiếp kiểm tra trên điện thoại; '
+                'cần thử trên điện thoại để xác nhận.'
+            ),
+        )
+        result = server.build_codex_task_outcomes(
+            {'turns': [item], 'diagnostics': {}},
+            [usage('mobile-fix', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result['missions'][0]['status'], 'unresolved')
+
+    def test_explicit_user_manual_repair_marks_model_failure(self):
+        turns = [
+            turn(
+                'model-attempt', 'thread-manual', '2026-09-10T10:00:00+00:00',
+                'sửa nội dung public GitHub cho tôi',
+                assistant_text='Tôi đang tìm file cần sửa.',
+            ),
+            turn(
+                'user-repair', 'thread-manual', '2026-09-10T10:10:00+00:00',
+                'về sau bị mất harness nên tôi đã tự sửa bằng tay luôn rồi',
+                assistant_text='Đã hiểu.',
+            ),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [usage('model-attempt', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(len(result['missions']), 1)
+        mission = result['missions'][0]
+        self.assertEqual(mission['status'], 'failed_user_repaired_auto')
+        self.assertTrue(mission['user_repaired'])
+        self.assertFalse(mission['accepted'])
+        self.assertEqual(result['summary']['abandoned_count'], 1)
+        self.assertEqual(result['summary']['unresolved_count'], 0)
+
+    def test_manual_review_can_record_user_repaired_outcome(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = os.path.join(temp_dir, 'reviews.json')
+            server.update_codex_mission_review({
+                'action': 'review', 'anchor_turn_id': 'manual-failure',
+                'outcome': 'user_repaired',
+            }, path)
+            reviews = server.load_codex_mission_reviews(path)
+            result = server.build_codex_task_outcomes(
+                {'turns': [turn(
+                    'manual-failure', 'thread-manual', '2026-09-10T10:00:00+00:00',
+                    'sửa bài viết GitHub',
+                )], 'diagnostics': {}},
+                [usage('manual-failure', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00')],
+                reviews=reviews,
+                now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+            )
+            mission = result['missions'][0]
+            self.assertEqual(mission['status'], 'failed_user_repaired_manual')
+            self.assertTrue(mission['outcome_reviewed'])
+            self.assertEqual(result['summary']['abandoned_count'], 1)
 
     def test_review_file_can_set_clear_and_suppress_repair_link(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -431,6 +790,12 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(mission['turns'][4]['categories'], ['system_diagnostics'])
         self.assertFalse(mission['needs_category_review'])
         self.assertEqual(result['summary']['review_case_count'], 0)
+        self.assertFalse(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
+        self.assertEqual(mission['audit_reasons'], [])
+        self.assertEqual(result['summary']['audit_case_count'], 0)
+        self.assertEqual(result['summary']['soft_audit_case_count'], 0)
+        self.assertEqual(result['summary']['audit_pattern_count'], 0)
 
     def test_unknown_low_confidence_turn_still_requires_review(self):
         turns = [
@@ -452,6 +817,546 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(result['summary']['review_case_count'], 1)
         self.assertIn('other_category', mission['category_review_reasons'])
         self.assertIn('low_category_confidence', mission['category_review_reasons'])
+        self.assertTrue(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
+        self.assertEqual(mission['audit_pattern_key'], '')
+        self.assertEqual(result['summary']['soft_audit_case_count'], 0)
+
+    def test_pure_greetings_are_not_tasks_or_matrix_samples(self):
+        turns = [
+            turn('hello', 'thread-hello', '2026-09-10T10:00:00+00:00', 'hello'),
+            turn('xin-chao', 'thread-xin-chao', '2026-09-10T11:00:00+00:00', 'xin chào'),
+        ]
+        events = [
+            usage('hello', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+            usage('xin-chao', '5.6 sol high', 100, '2026-09-10T11:01:00+00:00'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result['missions'], [])
+        self.assertEqual(result['summary']['mission_count'], 0)
+        self.assertEqual(result['matrices']['all']['eligible_missions'], 0)
+
+    def test_positive_acknowledgement_closes_prior_task(self):
+        turns = [
+            turn('work', 'thread-ack', '2026-09-10T10:00:00+00:00',
+                 'sửa bảng usage tracker trên web'),
+            turn('ack', 'thread-ack', '2026-09-10T10:05:00+00:00',
+                 'ồ được rồi, hay quá'),
+        ]
+        events = [usage('work', '5.6 sol high', 100, '2026-09-10T10:03:00+00:00')]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        self.assertEqual(len(result['missions']), 1)
+        self.assertEqual(result['missions'][0]['status'], 'accepted_explicit')
+
+    def test_explicit_new_feature_wins_over_generic_followup_words(self):
+        turns = [
+            turn('first', 'thread-features', '2026-09-10T10:00:00+00:00',
+                 'sửa biểu đồ token trong usage tracker'),
+            turn('second', 'thread-features', '2026-09-10T11:00:00+00:00',
+                 'thêm nữa là tôi có ý tưởng tiếp theo, tôi muốn thêm tính năng lưu độ rộng cột'),
+        ]
+        events = [
+            usage('first', '5.6 sol high', 100, '2026-09-10T10:30:00+00:00'),
+            usage('second', '5.6 sol high', 100, '2026-09-10T11:30:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result['missions']), 2)
+        first = next(item for item in result['missions'] if item['anchor_turn_id'] == 'first')
+        second = next(item for item in result['missions'] if item['anchor_turn_id'] == 'second')
+        self.assertEqual(first['status'], 'accepted_inferred')
+        self.assertEqual(second['status'], 'unresolved')
+
+    def test_ok_start_work_continues_plan_instead_of_accepting_it(self):
+        turns = [
+            turn('plan', 'thread-plan', '2026-09-10T10:00:00+00:00',
+                 'hãy lập kế hoạch viết lại tài liệu cho tôi'),
+            turn('execute', 'thread-plan', '2026-09-10T10:05:00+00:00',
+                 'ok bạn bắt đầu làm đi'),
+        ]
+        events = [
+            usage('plan', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+            usage('execute', '5.6 sol high', 100, '2026-09-10T10:06:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result['missions']), 1)
+        self.assertEqual(result['missions'][0]['anchor_turn_id'], 'plan')
+        self.assertEqual(result['missions'][0]['turn_count'], 2)
+        self.assertEqual(result['missions'][0]['status'], 'unresolved')
+
+    def test_ok_execute_on_github_continues_same_objective(self):
+        turns = [
+            turn('draft', 'thread-github', '2026-09-10T10:00:00+00:00',
+                 'viết lại tài liệu trong repo cho giống văn phong của tôi'),
+            turn('execute', 'thread-github', '2026-09-10T10:05:00+00:00',
+                 'ok thế bạn sửa trên github cho tôi đi'),
+        ]
+        events = [
+            usage('draft', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+            usage('execute', '5.6 sol high', 100, '2026-09-10T10:06:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result['missions']), 1)
+        self.assertEqual(result['missions'][0]['anchor_turn_id'], 'draft')
+        self.assertEqual(result['missions'][0]['turn_count'], 2)
+
+    def test_cross_model_concrete_action_after_answer_starts_new_mission(self):
+        turns = [
+            turn(
+                'cleanup', 'thread-public', '2026-09-21T02:43:00+00:00',
+                'kiểm tra và dọn các bản usage tracker cũ', model='5.6 sol xhigh',
+            ),
+            turn(
+                'path-question', 'thread-public', '2026-09-21T02:58:00+00:00',
+                'folder cuối của usage tracker giờ là đây đúng ko', model='5.6 sol xhigh',
+            ),
+            turn(
+                'sync-public', 'thread-public', '2026-09-21T04:08:00+00:00',
+                'ok giờ bạn đem bản cập nhật mới nhất sang folder public đi, '
+                'nhưng vẫn chưa đưa lên github nhé, rồi sửa phần tiếng Anh',
+                model='5.6 sol high',
+            ),
+        ]
+        events = [
+            usage('cleanup', '5.6 sol xhigh', 100, '2026-09-21T02:44:00+00:00'),
+            usage('path-question', '5.6 sol xhigh', 30, '2026-09-21T02:59:00+00:00'),
+            usage('sync-public', '5.6 sol high', 80, '2026-09-21T04:09:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+
+        missions = {item['anchor_turn_id']: item for item in result['missions']}
+        self.assertEqual(set(missions), {'cleanup', 'sync-public'})
+        self.assertEqual(missions['cleanup']['turn_ids'], ['cleanup', 'path-question'])
+        self.assertEqual(missions['sync-public']['route'], ['5.6 sol high'])
+        self.assertEqual(
+            missions['sync-public']['inferred_boundary_reason'],
+            'cross_model_new_action',
+        )
+        self.assertIsNone(missions['sync-public']['repair_of_anchor_turn_id'])
+
+    def test_cross_model_missing_ui_complaint_becomes_repair_mission(self):
+        turns = [
+            turn(
+                'original', 'thread-ui', '2026-09-21T04:08:00+00:00',
+                'đồng bộ bản mới sang public và sửa phần tiếng Anh', model='5.6 sol high',
+            ),
+            turn(
+                'repair', 'thread-ui', '2026-09-21T05:12:00+00:00',
+                'ủa phần chọn tiếng Anh với tiếng Việt đâu mất tiêu rồi, bạn bị làm sao vậy',
+                model='5.6 sol xhigh',
+            ),
+        ]
+        events = [
+            usage('original', '5.6 sol high', 100, '2026-09-21T04:09:00+00:00'),
+            usage('repair', '5.6 sol xhigh', 40, '2026-09-21T05:13:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+
+        missions = {item['anchor_turn_id']: item for item in result['missions']}
+        self.assertEqual(set(missions), {'original', 'repair'})
+        self.assertEqual(missions['original']['status'], 'abandoned_auto_repaired')
+        self.assertEqual(missions['repair']['repair_of_anchor_turn_id'], 'original')
+        self.assertEqual(missions['repair']['repair_penalty_tokens'], 40)
+        self.assertEqual(missions['original']['repair_penalty_received_tokens'], 40)
+        self.assertEqual(missions['repair']['inferred_boundary_reason'], 'cross_model_repair')
+
+    def test_instruction_constraints_are_not_misread_as_repairs(self):
+        for prompt in (
+            'không dùng dữ liệu cũ trong file Excel',
+            'tôi thấy bạn chưa dùng hết sức mạnh CPU và RAM',
+            'nhưng vẫn chưa đưa lên GitHub nhé',
+            'một số file PDF vẫn chưa có, hãy tạo các file còn thiếu',
+            'tôi vừa làm lại hai ảnh do chúng chưa xóa background, bạn sử dụng lại hình nhé',
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(server._codex_is_repair_prompt(prompt))
+
+        self.assertTrue(server._codex_is_repair_prompt('kết quả này chưa đúng, sửa lại cho tôi'))
+        self.assertTrue(server._codex_is_repair_prompt('phần chọn ngôn ngữ đâu mất tiêu rồi'))
+        self.assertTrue(server._codex_is_repair_prompt('nếu vẫn chưa tìm ra được cách tái tạo thì kiểm tra lại'))
+
+    def test_quota_accounting_question_does_not_create_repair_link(self):
+        question = (
+            'ví dụ công việc sửa web vừa rồi dùng Sol High rồi sửa lại bằng XHigh, '
+            'nên khoản hạn mức này cũng bị trừ vào Sol High nhỉ'
+        )
+        self.assertTrue(server._codex_is_repair_prompt(question))
+        self.assertTrue(server._codex_is_informational_question(question))
+        turns = [
+            turn('original', 'thread-quota', '2026-09-21T04:00:00+00:00',
+                 'sửa web usage tracker', model='5.6 sol high'),
+            turn('question', 'thread-quota', '2026-09-21T05:00:00+00:00',
+                 question, model='5.6 sol xhigh'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [
+                usage('original', '5.6 sol high', 100, '2026-09-21T04:01:00+00:00'),
+                usage('question', '5.6 sol xhigh', 40, '2026-09-21T05:01:00+00:00'),
+            ],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+        missions = {item['anchor_turn_id']: item for item in result['missions']}
+        self.assertIsNone(missions['question']['repair_of_anchor_turn_id'])
+        self.assertEqual(
+            missions['question']['inferred_boundary_reason'],
+            'quota_accounting_question',
+        )
+        self.assertEqual(missions['original']['repair_penalty_received_tokens'], 0)
+
+        self.assertFalse(server._codex_is_quota_accounting_question(
+            'bạn làm tiếp đi, thêm nữa hệ số hạn mức có phải thay đổi đúng ko'
+        ))
+
+    def test_cross_thread_repair_without_explicit_reference_is_not_auto_linked(self):
+        turns = [
+            turn('original', 'thread-one', '2026-09-21T04:00:00+00:00',
+                 'sửa web usage tracker và biểu đồ model', model='5.6 sol high'),
+            turn('possible-repair', 'thread-two', '2026-09-21T05:00:00+00:00',
+                 'web usage tracker và biểu đồ model chưa đúng, sửa lại giúp tôi',
+                 model='5.6 sol xhigh'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}},
+            [
+                usage('original', '5.6 sol high', 100, '2026-09-21T04:01:00+00:00'),
+                usage('possible-repair', '5.6 sol xhigh', 40, '2026-09-21T05:01:00+00:00'),
+            ],
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+        missions = {item['anchor_turn_id']: item for item in result['missions']}
+        self.assertIsNone(missions['possible-repair']['repair_of_anchor_turn_id'])
+        self.assertEqual(missions['original']['repair_penalty_received_tokens'], 0)
+
+    def test_immediate_same_thread_cross_model_repair_is_separate_and_high_confidence(self):
+        turns = [
+            turn('first', 'thread-repair', '2026-09-10T10:00:00+00:00',
+                 'sửa công thức nhóm tag trong file Excel'),
+            turn('second', 'thread-repair', '2026-09-10T10:10:00+00:00',
+                 'nhiệm vụ tiếp theo là cập nhật bảng khác'),
+            turn('repair', 'thread-repair', '2026-09-10T10:20:00+00:00',
+                 'ok thế bạn sửa lại đi'),
+        ]
+        events = [
+            usage('first', '5.6 sol high', 100, '2026-09-10T10:05:00+00:00'),
+            usage('second', '5.6 sol high', 100, '2026-09-10T10:15:00+00:00'),
+            usage('repair', '5.6 sol xhigh', 100, '2026-09-10T10:25:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        repaired_mission = next(
+            item for item in result['missions'] if item['anchor_turn_id'] == 'repair'
+        )
+        self.assertEqual(repaired_mission['turn_count'], 1)
+        self.assertEqual(repaired_mission['repair_of_anchor_turn_id'], 'second')
+        self.assertEqual(repaired_mission['repair_link_confidence'], 'high')
+        self.assertEqual(repaired_mission['inferred_boundary_reason'], 'cross_model_repair')
+        self.assertFalse(repaired_mission['soft_audit_needed'])
+
+    def test_delayed_same_category_request_starts_new_mission(self):
+        turns = [
+            turn('first', 'thread-gap', '2026-09-10T01:00:00+00:00',
+                 'phân tích bộ filter giao dịch hiện tại'),
+            turn('later', 'thread-gap', '2026-09-10T09:00:00+00:00',
+                 'so sánh hiệu quả của bộ filter một cột và hai cột'),
+        ]
+        events = [
+            usage('first', '5.6 sol high', 100, '2026-09-10T01:30:00+00:00'),
+            usage('later', '5.6 sol high', 100, '2026-09-10T09:30:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual({item['anchor_turn_id'] for item in result['missions']}, {'first', 'later'})
+
+    def test_delayed_explicit_continuation_stays_in_same_mission(self):
+        turns = [
+            turn('first', 'thread-gap-followup', '2026-09-10T01:00:00+00:00',
+                 'phân tích bộ filter giao dịch hiện tại'),
+            turn('later', 'thread-gap-followup', '2026-09-10T09:00:00+00:00',
+                 'bạn làm tiếp phần phân tích vừa rồi đi'),
+        ]
+        events = [
+            usage('first', '5.6 sol high', 100, '2026-09-10T01:30:00+00:00'),
+            usage('later', '5.6 sol high', 100, '2026-09-10T09:30:00+00:00'),
+        ]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result['missions']), 1)
+        self.assertEqual(result['missions'][0]['turn_count'], 2)
+        self.assertTrue(server._codex_is_explicit_continuation_prompt(
+            'bạn đang dở ấy, bạn làm tiếp đi'
+        ))
+        self.assertTrue(server._codex_is_explicit_continuation_prompt(
+            'ok giờ tôi có hạn mức lại rồi, bạn làm tiếp các công việc chưa hoàn thành nhé'
+        ))
+        self.assertTrue(server._codex_is_explicit_continuation_prompt(
+            'bạn có làm tiếp nhiệm vụ này được ko'
+        ))
+        self.assertTrue(server._codex_is_explicit_continuation_prompt(
+            '<codex_internal_context source="goal">Continue working toward the active goal.'
+            '</codex_internal_context>'
+        ))
+
+    def test_generic_followup_word_inside_new_prompt_does_not_bridge_long_gap(self):
+        turns = [
+            turn('old', 'thread-gap-generic', '2026-08-30T10:00:00+00:00',
+                 'sửa lỗi tải lịch tin Forex Factory'),
+            turn('new', 'thread-gap-generic', '2026-09-21T10:00:00+00:00',
+                 'zoom in zoom out làm mất vị trí theo dõi, thêm nữa thanh công cụ bị dịch chuyển'),
+        ]
+        events = [
+            usage('old', '5.6 sol high', 100, '2026-08-30T10:01:00+00:00'),
+            usage('new', '5.6 sol high', 100, '2026-09-21T10:01:00+00:00'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 21, tzinfo=timezone.utc),
+        )
+        missions = {item['anchor_turn_id']: item for item in result['missions']}
+        self.assertEqual(set(missions), {'old', 'new'})
+        self.assertEqual(missions['new']['inferred_boundary_reason'], 'long_gap_followup')
+
+    def test_unconfirmed_groups_are_review_only_and_group_similar_topics(self):
+        missions = [
+            {
+                'anchor_turn_id': 'usage-1', 'status': 'unresolved',
+                'categories': ['web'], 'title': 'sửa usage tracker',
+                'turn_count': 1,
+                'turns': [{'prompt': 'sửa biểu đồ token trong usage tracker'}],
+            },
+            {
+                'anchor_turn_id': 'usage-2', 'status': 'unresolved',
+                'categories': ['research'], 'title': 'hỏi quota',
+                'turn_count': 1,
+                'turns': [{'prompt': 'tại sao quota hạn mức Codex thay đổi?'}],
+            },
+            {
+                'anchor_turn_id': 'done', 'status': 'accepted_explicit',
+                'categories': ['web'], 'title': 'đã xong', 'turn_count': 1,
+                'turns': [{'prompt': 'sửa usage tracker'}],
+            },
+        ]
+        groups = server._codex_collect_unconfirmed_groups(missions)
+        self.assertEqual(sum(group['mission_count'] for group in groups), 2)
+        self.assertTrue(all(group['topic_key'] == 'usage_tracker' for group in groups))
+        self.assertEqual(missions[0]['unconfirmed_group_key'], 'usage_tracker:action')
+        self.assertEqual(missions[1]['unconfirmed_group_key'], 'usage_tracker:question')
+        self.assertEqual(missions[2]['unconfirmed_group_key'], '')
+
+    def test_unconfirmed_group_does_not_treat_generic_token_as_usage_tracker(self):
+        missions = [
+            {
+                'anchor_turn_id': 'su30-token', 'status': 'unresolved',
+                'categories': ['documents'], 'title': 'chuyển tài liệu',
+                'turn_count': 1,
+                'turns': [{'prompt': 'chuyển tài liệu SU-30 này sao cho ít tốn token'}],
+            },
+            {
+                'anchor_turn_id': 'model-advice', 'status': 'unresolved',
+                'categories': ['research'], 'title': 'chọn model',
+                'turn_count': 1,
+                'turns': [{'prompt': 'Astra hay 5.6 Sol phù hợp hơn cho công việc của tôi?'}],
+            },
+        ]
+        server._codex_collect_unconfirmed_groups(missions)
+        self.assertEqual(missions[0]['unconfirmed_group_key'], 'su30:action')
+        self.assertEqual(missions[1]['unconfirmed_group_key'], 'product_model:question')
+
+    def test_explicit_usage_tracker_reference_wins_over_model_name(self):
+        mission = {
+            'anchor_turn_id': 'tracker-astra', 'status': 'unresolved',
+            'categories': ['web'], 'title': 'sửa biểu đồ', 'turn_count': 1,
+            'turns': [{
+                'prompt': 'sửa biểu đồ Astra trong Usage Tracker cho tôi',
+            }],
+        }
+        server._codex_collect_unconfirmed_groups([mission])
+        self.assertEqual(mission['unconfirmed_group_key'], 'usage_tracker:action')
+
+    def test_clean_high_confidence_mission_is_not_flagged_for_audit(self):
+        turns = [
+            turn('diag', 'thread-clean', '2026-09-10T10:00:00+00:00',
+                 'sao no lai bi chan quyen, kiem tra quyen doc'),
+        ]
+        events = [usage('diag', '5.6 sol high', 100, '2026-09-10T10:05:00+00:00')]
+
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+
+        mission = result['missions'][0]
+        self.assertEqual(mission['category_confidence'], 'high')
+        self.assertFalse(mission['needs_category_review'])
+        self.assertFalse(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
+        self.assertEqual(result['summary']['audit_case_count'], 0)
+
+    def test_long_gap_is_not_a_soft_audit_reason_after_boundary_pass(self):
+        mission = {
+            'id': 'mission-long-gap',
+            'anchor_turn_id': 'turn-a',
+            'title': 'Repeated actions in one old thread',
+            'status': 'unresolved',
+            'category': 'system_diagnostics',
+            'categories': ['system_diagnostics'],
+            'category_confidence': 'high',
+            'category_reviewed': False,
+            'outcome_reviewed': False,
+            'needs_review': False,
+            'needs_category_review': False,
+            'pure_model': True,
+            'turns': [
+                {
+                    'turn_id': 'turn-a',
+                    'started_at': '2026-09-10T01:00:00+00:00',
+                    'category': 'system_diagnostics',
+                    'categories': ['system_diagnostics'],
+                    'prompt': 'Run the first completed action.',
+                },
+                {
+                    'turn_id': 'turn-b',
+                    'started_at': '2026-09-10T09:30:00+00:00',
+                    'category': 'system_diagnostics',
+                    'categories': ['system_diagnostics'],
+                    'prompt': 'Run a later action in the same thread.',
+                },
+            ],
+        }
+
+        cases, groups, patterns = server._codex_collect_audit_cases([mission])
+
+        self.assertEqual(cases, [])
+        self.assertEqual(groups, [])
+        self.assertEqual(patterns, [])
+        self.assertFalse(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
+
+    def test_fully_reviewed_long_gap_is_not_reopened_as_soft_audit(self):
+        mission = {
+            'id': 'mission-reviewed-gap',
+            'anchor_turn_id': 'turn-a',
+            'title': 'Human-reviewed long mission',
+            'status': 'accepted_manual',
+            'category': 'system_diagnostics',
+            'categories': ['system_diagnostics'],
+            'category_confidence': 'high',
+            'category_reviewed': True,
+            'outcome_reviewed': True,
+            'needs_review': False,
+            'needs_category_review': False,
+            'pure_model': True,
+            'turns': [
+                {
+                    'turn_id': 'turn-a',
+                    'started_at': '2026-09-10T01:00:00+00:00',
+                    'category': 'system_diagnostics',
+                    'categories': ['system_diagnostics'],
+                    'prompt': 'Run the first completed action.',
+                },
+                {
+                    'turn_id': 'turn-b',
+                    'started_at': '2026-09-10T09:30:00+00:00',
+                    'category': 'system_diagnostics',
+                    'categories': ['system_diagnostics'],
+                    'prompt': 'Run a later action in the same thread.',
+                },
+            ],
+        }
+
+        cases, groups, patterns = server._codex_collect_audit_cases([mission])
+
+        self.assertEqual(cases, [])
+        self.assertEqual(groups, [])
+        self.assertEqual(patterns, [])
+        self.assertFalse(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
+
+    def test_automatic_multi_category_alone_is_not_soft_audit(self):
+        mission = {
+            'id': 'mission-mixed-valid',
+            'anchor_turn_id': 'turn-a',
+            'title': 'Edit a document and diagnose its font',
+            'status': 'accepted_inferred',
+            'category': 'documents',
+            'categories': ['documents', 'system_diagnostics'],
+            'category_confidence': 'medium',
+            'category_reviewed': False,
+            'outcome_reviewed': False,
+            'needs_review': False,
+            'needs_category_review': False,
+            'pure_model': True,
+            'turns': [{
+                'turn_id': 'turn-a',
+                'started_at': '2026-09-10T01:00:00+00:00',
+                'category': 'documents',
+                'categories': ['documents', 'system_diagnostics'],
+                'category_ambiguous': True,
+                'prompt': 'Repair this document and diagnose the broken font.',
+            }],
+        }
+
+        cases, groups, patterns = server._codex_collect_audit_cases([mission])
+
+        self.assertEqual(cases, [])
+        self.assertEqual(groups, [])
+        self.assertEqual(patterns, [])
+        self.assertFalse(mission['audit_needed'])
+        self.assertFalse(mission['soft_audit_needed'])
 
     def test_vietnamese_d_stroke_and_blocked_permission_are_classified(self):
         categories, primary, confidence, ambiguous = server._codex_task_categories(
@@ -467,6 +1372,102 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         )
         self.assertEqual(primary, 'system_diagnostics')
         self.assertEqual(categories, ['system_diagnostics'])
+        self.assertEqual(confidence, 'high')
+        self.assertFalse(ambiguous)
+
+    def test_su30_path_is_domain_context_not_automatic_3d_work(self):
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'chuyển file PDF này sang Unicode và giữ nguyên bố cục',
+            r'D:\tài liệu đồng bộ\tai lieu su30',
+        )
+        self.assertEqual(categories, ['documents'])
+        self.assertEqual(primary, 'documents')
+        self.assertEqual(confidence, 'high')
+        self.assertFalse(ambiguous)
+
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'xây buồng lái 3D bằng Three.js',
+            r'D:\tài liệu đồng bộ\tai lieu su30',
+        )
+        self.assertIn('simulation_3d', categories)
+        self.assertEqual(primary, 'simulation_3d')
+        self.assertEqual(confidence, 'high')
+
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'bạn làm tiếp đi',
+            r'C:\work\cockpit360',
+        )
+        self.assertEqual(categories, ['simulation_3d'])
+        self.assertEqual(primary, 'simulation_3d')
+        self.assertFalse(ambiguous)
+
+    def test_category_keywords_do_not_match_inside_unrelated_words(self):
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'thôi hướng dẫn tôi thực hiện wifi debug đi'
+        )
+        self.assertEqual(categories, ['system_diagnostics'])
+        self.assertEqual(primary, 'system_diagnostics')
+        self.assertFalse(ambiguous)
+
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'trước tôi có cài chương trình đó và có hẳn file Python rồi'
+        )
+        self.assertEqual(categories, ['software_debugging'])
+        self.assertNotIn('documents', categories)
+
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'sửa trình độ học vấn trong hồ sơ nhân sự'
+        )
+        self.assertEqual(categories, ['documents'])
+        self.assertEqual(primary, 'documents')
+
+    def test_usage_tracker_classifier_examples_do_not_become_task_labels(self):
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'sửa phần phân loại trong usage tracker; ví dụ tài liệu bị chặn quyền đọc '
+            'hoặc công việc mô phỏng 3D phải được gom đúng nhóm'
+        )
+        self.assertEqual(categories, ['web'])
+        self.assertEqual(primary, 'web')
+        self.assertEqual(confidence, 'high')
+        self.assertFalse(ambiguous)
+
+    def test_embedded_review_example_inherits_usage_tracker_work(self):
+        turns = [
+            turn('tracker', 'thread-meta', '2026-09-10T10:00:00+00:00',
+                 'sửa biểu đồ trong usage tracker'),
+            turn('example', 'thread-meta', '2026-09-10T10:05:00+00:00',
+                 'review lại từng mẫu quá lâu, ví dụ lượt 1 sửa hồ sơ, lượt 2 bị chặn quyền đọc'),
+        ]
+        events = [usage(item['turn_id'], item['model_key'], 100, item['started_at']) for item in turns]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        mission = result['missions'][0]
+        self.assertEqual(mission['categories'], ['web'])
+        self.assertEqual(mission['turns'][1]['categories'], ['web'])
+        self.assertFalse(mission['turns'][1]['category_ambiguous'])
+
+    def test_python_mention_requires_programming_context(self):
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'ổ đĩa đang nặng, có nên xóa không vì Codex cũng dùng Python'
+        )
+        self.assertEqual(categories, ['system_diagnostics'])
+        self.assertEqual(primary, 'system_diagnostics')
+
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'chương trình này có file Python, sửa script giúp tôi'
+        )
+        self.assertEqual(categories, ['software_debugging'])
+        self.assertEqual(primary, 'software_debugging')
+
+    def test_codex_context_configuration_is_software_debugging(self):
+        categories, primary, confidence, ambiguous = server._codex_task_categories(
+            'tôi tăng giới hạn context lên 240k rồi, nhờ bạn chỉnh sửa lại mấy file đó'
+        )
+        self.assertEqual(primary, 'software_debugging')
+        self.assertIn('software_debugging', categories)
         self.assertEqual(confidence, 'high')
         self.assertFalse(ambiguous)
 
@@ -562,6 +1563,81 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(cell['median_total_tokens'], 140)
         self.assertEqual(cell['median_repair_penalty_tokens'], 0)
 
+    def test_abandoned_same_model_attempt_stays_in_accepted_repair_chain(self):
+        turns = [
+            turn('failed', 'old-thread', '2026-09-10T10:00:00+00:00',
+                 'sửa rule usage tracker', model='5.6 sol high'),
+            turn('repair', 'new-thread', '2026-09-10T11:00:00+00:00',
+                 'sửa tiếp rule usage tracker', model='5.6 sol high'),
+        ]
+        events = [
+            usage('failed', '5.6 sol high', 100, '2026-09-10T10:05:00+00:00'),
+            usage('repair', '5.6 sol high', 200, '2026-09-10T11:05:00+00:00'),
+        ]
+        reviews = {
+            'version': 1, 'turn_boundaries': {},
+            'missions': {
+                'failed': {'outcome': 'abandoned'},
+                'repair': {
+                    'outcome': 'accepted',
+                    'repair_of_anchor_turn_id': 'failed',
+                },
+            },
+        }
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews=reviews,
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        samples = server._codex_matrix_attributed_samples(result['missions'])
+        tracker_samples = [
+            sample for sample in samples
+            if sample['model_key'] == '5.6 sol high' and sample['category'] == 'web'
+        ]
+        self.assertEqual(len(tracker_samples), 1)
+        self.assertEqual(tracker_samples[0]['total_tokens'], 300)
+        self.assertTrue(tracker_samples[0]['accepted'])
+        self.assertFalse(tracker_samples[0]['unconfirmed'])
+
+    def test_abandoned_mixed_route_is_kept_when_later_repair_completes_goal(self):
+        turns = [
+            turn('failed-high', 'old-thread', '2026-09-10T10:00:00+00:00',
+                 'sửa rule usage tracker', model='5.6 sol high'),
+            turn('failed-medium', 'old-thread', '2026-09-10T10:10:00+00:00',
+                 'làm tiếp rule usage tracker', model='5.6 sol standard'),
+            turn('repair', 'new-thread', '2026-09-10T11:00:00+00:00',
+                 'sửa tiếp rule usage tracker', model='5.6 sol high'),
+        ]
+        events = [
+            usage('failed-high', '5.6 sol high', 100, '2026-09-10T10:05:00+00:00'),
+            usage('failed-medium', '5.6 sol standard', 50, '2026-09-10T10:15:00+00:00'),
+            usage('repair', '5.6 sol high', 200, '2026-09-10T11:05:00+00:00'),
+        ]
+        reviews = {
+            'version': 1, 'turn_boundaries': {},
+            'missions': {
+                'failed-high': {'outcome': 'abandoned'},
+                'repair': {
+                    'outcome': 'accepted',
+                    'repair_of_anchor_turn_id': 'failed-high',
+                },
+            },
+        }
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews=reviews,
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        samples = server._codex_matrix_attributed_samples(result['missions'])
+        tracker = {
+            sample['model_key']: sample for sample in samples
+            if sample['category'] == 'web'
+        }
+        self.assertEqual(tracker['5.6 sol high']['total_tokens'], 300)
+        self.assertEqual(tracker['5.6 sol standard']['raw_total_tokens'], 50)
+        self.assertTrue(tracker['5.6 sol high']['accepted'])
+        self.assertTrue(tracker['5.6 sol standard']['accepted'])
+
     def test_non_contiguous_manual_repair_chain_uses_cumulative_quota_penalty(self):
         turns = [
             turn('a', 'thread-chain', '2026-09-10T10:00:00+00:00',
@@ -650,6 +1726,36 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(xhigh['relative_quota_vs_sol_high'], 0.667)
         self.assertEqual(astra['effective_quota_pct_5h'], 1.0)
         self.assertEqual(astra['relative_quota_vs_sol_high'], 0.333)
+
+    def test_explicit_thread_link_makes_cross_thread_repair_candidate_high_confidence(self):
+        turns = [
+            turn(
+                'original', '11111111-1111-7111-8111-111111111111',
+                '2026-09-10T10:00:00+00:00', 'làm trang public GitHub',
+                model='5.6 sol high',
+            ),
+            turn(
+                'repair', '22222222-2222-7222-8222-222222222222',
+                '2026-09-10T11:00:00+00:00',
+                'codex://threads/11111111-1111-7111-8111-111111111111 '
+                'phần trong task này chưa đúng, sửa lại giúp tôi',
+                model='gpt-6-astra low',
+            ),
+        ]
+        events = [
+            usage('original', '5.6 sol high', 100, '2026-09-10T10:01:00+00:00'),
+            usage('repair', 'gpt-6-astra low', 50, '2026-09-10T11:01:00+00:00'),
+        ]
+        result = server.build_codex_task_outcomes(
+            {'turns': turns, 'diagnostics': {}}, events,
+            reviews={'version': 1, 'turn_boundaries': {}, 'missions': {}},
+            now=datetime(2026, 9, 11, tzinfo=timezone.utc),
+        )
+        missions = {mission['anchor_turn_id']: mission for mission in result['missions']}
+        repair = missions['repair']
+        self.assertEqual(repair['repair_of_anchor_turn_id'], 'original')
+        self.assertEqual(repair['repair_link_confidence'], 'high')
+        self.assertTrue(repair['repair_link_candidates'][0]['explicit_thread_reference'])
 
     def test_unknown_quota_rate_stays_unavailable_instead_of_using_tokens(self):
         missions = [{
@@ -774,6 +1880,36 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         self.assertEqual(result['matrices']['all']['eligible_missions'], 0)
         self.assertEqual(result['matrices']['all']['eligible_samples'], 0)
 
+    def test_manually_reviewed_parentless_subagent_is_promoted_to_mission(self):
+        orphan = turn(
+            'reviewed-orphan', 'direct-thread', '2026-09-17T05:17:26+00:00',
+            'Sửa công thức Excel để chạy đúng trên mobile.',
+            model='gpt-6-astra low', subagent=True,
+        )
+        orphan['outer_turn_id'] = 'reviewed-orphan'
+        result = server.build_codex_task_outcomes(
+            {'turns': [orphan], 'diagnostics': {}},
+            [usage('reviewed-orphan', 'gpt-6-astra low', 120, '2026-09-17T05:20:00+00:00')],
+            reviews={
+                'version': 1,
+                'turn_boundaries': {},
+                'missions': {
+                    'reviewed-orphan': {
+                        'categories': ['documents'],
+                        'outcome': 'accepted',
+                    },
+                },
+            },
+            now=datetime(2026, 9, 18, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(len(result['missions']), 1)
+        mission = result['missions'][0]
+        self.assertEqual(mission['anchor_turn_id'], 'reviewed-orphan')
+        self.assertEqual(mission['status'], 'accepted_manual')
+        self.assertEqual(mission['total_tokens'], 120)
+        self.assertEqual(result['diagnostics']['delegated_turns_orphaned'], 0)
+
     def test_turn_scanner_uses_cache_and_skips_injected_context(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             sessions = os.path.join(temp_dir, 'sessions')
@@ -811,6 +1947,49 @@ class CodexTaskOutcomeTests(unittest.TestCase):
             self.assertTrue(first['turns'][0]['completed'])
             self.assertEqual(second['diagnostics']['files_cached'], 1)
             self.assertEqual(second['diagnostics']['bytes_read'], 0)
+
+    def test_turn_scanner_counts_custom_tool_calls_and_outputs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sessions = os.path.join(temp_dir, 'sessions')
+            os.makedirs(sessions)
+            cache = os.path.join(temp_dir, 'turn-cache.json')
+            log_path = os.path.join(sessions, 'rollout-custom-tools.jsonl')
+            metadata = {'turn_id': 'turn-custom'}
+            records = [
+                {'type': 'session_meta', 'timestamp': '2026-09-01T10:00:00Z',
+                 'payload': {'id': 'thread-custom', 'cwd': r'C:\work\usage-tracker'}},
+                {'type': 'event_msg', 'timestamp': '2026-09-01T10:00:01Z',
+                 'payload': {'type': 'task_started', 'turn_id': 'turn-custom'}},
+                {'type': 'turn_context', 'timestamp': '2026-09-01T10:00:02Z',
+                 'payload': {'turn_id': 'turn-custom', 'model': 'gpt-6-astra', 'effort': 'low'}},
+                {'type': 'response_item', 'timestamp': '2026-09-01T10:00:03Z',
+                 'payload': {'type': 'message', 'role': 'user',
+                             'content': [{'type': 'input_text', 'text': 'Sửa workbook.'}]}},
+                {'type': 'response_item', 'timestamp': '2026-09-01T10:00:04Z',
+                 'payload': {'type': 'custom_tool_call', 'name': 'exec',
+                             'internal_chat_message_metadata_passthrough': metadata}},
+                {'type': 'response_item', 'timestamp': '2026-09-01T10:00:05Z',
+                 'payload': {'type': 'custom_tool_call_output', 'output': {'exit_code': 0},
+                             'internal_chat_message_metadata_passthrough': metadata}},
+                {'type': 'response_item', 'timestamp': '2026-09-01T10:00:06Z',
+                 'payload': {'type': 'custom_tool_call', 'name': 'exec',
+                             'internal_chat_message_metadata_passthrough': metadata}},
+                {'type': 'response_item', 'timestamp': '2026-09-01T10:00:07Z',
+                 'payload': {'type': 'custom_tool_call_output', 'output': {'exit_code': 1},
+                             'internal_chat_message_metadata_passthrough': metadata}},
+                {'type': 'event_msg', 'timestamp': '2026-09-01T10:00:08Z',
+                 'payload': {'type': 'task_complete', 'turn_id': 'turn-custom'}},
+            ]
+            with open(log_path, 'w', encoding='utf-8') as handle:
+                for record in records:
+                    handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+            result = server.scan_codex_mission_turns(sessions_dir=sessions, cache_file=cache)
+            self.assertEqual(len(result['turns']), 1)
+            scanned = result['turns'][0]
+            self.assertEqual(scanned['tool_call_count'], 2)
+            self.assertEqual(scanned['tool_success_count'], 1)
+            self.assertEqual(scanned['tool_failure_count'], 1)
 
     def test_single_outer_task_splits_human_messages_and_usage_without_double_counting(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -859,6 +2038,7 @@ class CodexTaskOutcomeTests(unittest.TestCase):
             self.assertTrue(all(item['outer_turn_id'] == 'outer-turn' for item in scanned['turns']))
             self.assertEqual([item['user_text'] for item in scanned['turns']], prompts)
             self.assertEqual([item['assistant_message_count'] for item in scanned['turns']], [1, 1, 1, 1, 1])
+            self.assertEqual([item['assistant_text'] for item in scanned['turns']], ['done'] * 5)
 
             token_totals = [100, 200, 300, 400, 500]
             events = [

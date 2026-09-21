@@ -41,7 +41,7 @@ Usage trung bình (average / typical): Đóng vai trò làm mốc tham chiếu c
 
 Việc kết hợp cả hai chỉ số giúp bạn vừa có cảnh báo sớm khi một task phát sinh chi phí bất thường, vừa có mốc nền tảng (baseline) để so sánh và lựa chọn mô hình phù hợp.
 
-![Model breakdown and real usage cost view]<img width="1713" height="945" alt="Ảnh chụp màn hình 2026-09-16 171748" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
+<img width="1713" height="945" alt="Bảng phân tích model và chi phí sử dụng thực tế" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
 <img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
 
 
@@ -59,14 +59,16 @@ Các model nhẹ hoặc effort thấp (như GPT-5.5 Low, Sol High) nhìn qua t�
 
 Ngược lại, model mạnh hơn (như 5.6 Sol Extra High) có chi phí mỗi lượt chạy cao hơn, nhưng khả năng hiểu sâu giúp xử lý dứt điểm chỉ sau 1–2 lần tương tác, không mất công "dạy đi dạy lại". Tính trên toàn bộ nhiệm vụ từ đầu đến cuối, tổng token tiêu hao thực tế đôi khi lại tiết kiệm hơn.
 
-Vì vậy, tracker cần chuyển từ việc đo lường theo từng turn riêng lẻ sang đo tổng lượng token thực tế cần dùng để hoàn thành xong một nhiệm vụ.
+Vì vậy, tracker chuyển từ việc đo từng turn riêng lẻ sang đo toàn bộ mức tiêu hao để hoàn thành một nhiệm vụ. Raw token vẫn được giữ để kiểm tra, còn hệ số chính của ma trận ưu tiên phần trăm hạn mức Codex 5 giờ đã đo; điểm phải bắc cầu hoặc ước lượng luôn kèm nguồn và độ tin cậy.
 
 b. Phương pháp thu thập và tính toán dữ liệu
 Dựa trên log lịch sử các task đã chạy:
 
 Với model xử lý tốt: Giao lệnh một lần hoàn thành, không phát sinh thêm lượt chỉnh sửa -> Lấy trực tiếp token của session/turn đó.
 
-Với model cần can thiệp: Bao gồm toàn bộ các lượt re-teaching, nhắc lại yêu cầu, sửa lỗi code hoặc điều chỉnh logic cho đến khi kết quả được nghiệm thu -> Cộng dồn toàn bộ token của các lượt này để ra Tổng token / Nhiệm vụ.
+Với model cần can thiệp: Bao gồm toàn bộ các lượt re-teaching, nhắc lại yêu cầu, sửa lỗi code hoặc điều chỉnh logic cho đến khi kết quả được nghiệm thu.
+
+Khi đổi model để sửa kết quả chưa đạt, lượt sửa được giữ thành một mission riêng để model sửa vẫn chịu đúng mức sử dụng của nó. Đồng thời, mức tiêu hao của lượt sửa được cộng như khoản phạt cho model tạo ra kết quả chưa đạt. Với chuỗi sửa nhiều model, khoản sửa tiếp theo được truyền ngược cho các mắt xích thất bại trước đó thay vì gộp toàn bộ chuỗi thành một mission trộn.
 
 c. Cấu trúc bảng ma trận 2 chiều
 Bảng được thiết kế để lượng hóa năng lực và mức độ tiêu hao của từng cặp Model + Effort trên từng nhóm việc cụ thể:
@@ -85,20 +87,20 @@ Cột ngang (Model + Effort): Các cấu hình đem ra đối chiếu (GPT-5.5 L
 
 Mốc chuẩn tham chiếu (Baseline): Lấy Sol High làm mốc chuẩn 1.00x.
 
-Các ô còn lại hiển thị hệ số tương quan dựa trên tổng token tiêu thụ thực tế để xong việc đó.
+Các ô còn lại hiển thị hệ số tương quan hạn mức 5 giờ để hoàn thành nhiệm vụ, lấy Sol High trong cùng loại việc làm mốc. Nếu chưa đủ điểm hạn mức trực tiếp, tracker chỉ dùng đường bắc cầu có bằng chứng và ghi rõ đây là ước lượng; hệ số raw token vẫn xuất hiện như số liệu hỗ trợ.
 
-Hệ số < 1.00x: Tiết kiệm token hơn Sol High trên cùng loại việc.
+Hệ số < 1.00x: Tiêu hao hạn mức 5 giờ ít hơn Sol High trên cùng loại việc.
 
-Hệ số > 1.00x: Tiêu tốn nhiều token hơn.
+Hệ số > 1.00x: Tiêu hao hạn mức 5 giờ nhiều hơn Sol High.
 
 Xử lý thiếu số liệu: Với những bài toán chưa từng chạy trên một cấu hình model nhất định, ô tương ứng hiển thị rõ Chưa có dữ liệu, không tự ý nội suy hay gán mặc định bằng 0.
 
 d. Giá trị mang lại
 Chọn model theo số liệu định lượng: Nhìn vào ma trận sẽ biết rõ: loại việc nào đơn giản để giao cho model nhẹ nhằm tiết kiệm quota, và loại việc nào bắt buộc phải dùng model mạnh ngay từ đầu để tránh vòng lặp sửa lỗi tốn kém.
 
-Tính năng phụ trợ cần bổ sung trên UI: Lưu lại trạng thái thiết lập gần nhất (model, bộ lọc, loại task) vào bộ nhớ trình duyệt, tránh việc mỗi lần mở lại giao diện tracker bị reset về mặc định gây bất tiện khi theo dõi.
+Các thiết lập gần nhất như ngôn ngữ, model, bộ lọc, khoảng thời gian, đơn vị biểu đồ, kích thước bảng và độ rộng cột được lưu trong trình duyệt để lần mở sau giữ nguyên cách xem.
 
-![Quota per task demo]<img width="1757" height="687" alt="Ảnh chụp màn hình 2026-09-17 083012" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
+<img width="1757" height="687" alt="Ma trận hạn mức theo loại nhiệm vụ" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
 
 
 ## Tự động phân nhóm chỉ là gợi ý
@@ -112,6 +114,8 @@ Mission grouping dùng heuristic nên sẽ có trường hợp đoán sai ranh g
 - trả ranh giới về heuristic tự động.
 
 Automation ở đây giúp giảm công kiểm tra, nhưng không được phép biến một suy đoán thành ground truth chỉ vì máy tự sinh ra nó.
+
+Rule tự động hiện ưu tiên những trường hợp có bằng chứng rõ: một yêu cầu sửa ngay sau nhiệm vụ trong cùng task, đổi model để xử lý chính lỗi đó, câu hỏi riêng về quota/chi phí, hoặc một yêu cầu mới sau khoảng nghỉ dài. Câu “làm tiếp” rõ ràng vẫn nối vào mission cũ. Một câu có từ follow-up nhưng chứa yêu cầu mới sau khoảng nghỉ dài sẽ được tách. Hệ thống không tự nối một lượt sửa ở task khác nếu người dùng không dẫn chính xác task cũ; các trường hợp đó vẫn để review thủ công.
 
 ## Từ quota đoán sang quota live
 
@@ -171,7 +175,7 @@ powershell -ExecutionPolicy Bypass -File .\start-background.ps1
 Sau đó mở:
 
 ```text
-http://127.0.0.1:5050/
+http://127.0.0.1:5051/
 ```
 
 Dừng hoặc restart server:

@@ -8,7 +8,8 @@ $runtime = Join-Path $repo "runtime"
 $pidFile = Join-Path $runtime "server.pid"
 $stdoutLog = Join-Path $runtime "server.out.log"
 $stderrLog = Join-Path $runtime "server.err.log"
-$url = "http://127.0.0.1:5050/"
+$port = 5051
+$url = "http://127.0.0.1:$port/"
 
 function Test-CanonicalTrackerProcess {
     param(
@@ -45,7 +46,7 @@ function Test-CanonicalTrackerProcess {
 
 New-Item -ItemType Directory -Path $runtime -Force | Out-Null
 
-$listener = Get-NetTCPConnection -LocalPort 5050 -State Listen -ErrorAction SilentlyContinue
+$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($listener) {
     $listenerPid = @($listener | Select-Object -ExpandProperty OwningProcess -Unique)[0]
     $listenerProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$listenerPid" -ErrorAction SilentlyContinue
@@ -58,10 +59,10 @@ if ($listener) {
                 exit 0
             }
         } catch {
-            throw "The canonical Usage Tracker owns port 5050 but is not responding. Restart it with restart-server.ps1."
+            throw "The canonical Usage Tracker owns port $port but is not responding. Restart it with restart-server.ps1."
         }
     }
-    throw "Port 5050 is occupied by PID $listenerPid from another checkout or application. It was not stopped."
+    throw "Port $port is occupied by PID $listenerPid from another checkout or application. It was not stopped."
 }
 
 $bundledPython = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"

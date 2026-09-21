@@ -51,7 +51,7 @@ CODEX_USAGE_FILE = os.path.join(BASE_DIR, 'codex_usage.json')
 CODEX_MODELS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_models_cache.json')
 CODEX_MISSION_TURNS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_mission_turns_cache.json')
 CODEX_MISSION_REVIEWS_FILE = os.path.join(BASE_DIR, 'codex_mission_reviews.json')
-CODEX_MISSION_TURNS_CACHE_VERSION = 4
+CODEX_MISSION_TURNS_CACHE_VERSION = 7
 QUOTA_OBSERVATIONS_FILE = os.path.join(BASE_DIR, 'quota_observations.json')
 REAL_QUOTAS_FILE = os.path.join(BASE_DIR, 'real_quotas.json')
 VSCDB_PATH = os.path.expanduser(os.path.join('~', 'AppData', 'Roaming', 'Antigravity IDE', 'User', 'globalStorage', 'state.vscdb'))
@@ -4839,7 +4839,9 @@ CODEX_TASK_CATEGORIES = (
     {'key': 'other', 'label': 'Công việc khác'},
 )
 CODEX_TASK_CATEGORY_KEYS = {item['key'] for item in CODEX_TASK_CATEGORIES}
-CODEX_MISSION_OUTCOME_OVERRIDES = {'accepted', 'unresolved', 'abandoned'}
+CODEX_MISSION_OUTCOME_OVERRIDES = {
+    'accepted', 'inferred', 'unresolved', 'abandoned', 'user_repaired', 'excluded',
+}
 
 
 def _codex_plain_text(value):
@@ -4923,7 +4925,22 @@ def _empty_codex_mission_turn(turn_id, timestamp=None):
         'user_tokens_est': 0,
         'user_message_count': 0,
         'assistant_message_count': 0,
+        'assistant_text': '',
+        'tool_call_count': 0,
+        'tool_success_count': 0,
+        'tool_failure_count': 0,
+        'task_error': '',
     }
+
+
+def _codex_delegation_source_thread_id(text):
+    """Return the parent thread recorded by a Codex delegation envelope."""
+    match = re.search(
+        r'<codex_delegation>.*?<source_thread_id>\s*([A-Za-z0-9_-]{1,128})\s*</source_thread_id>',
+        str(text or ''),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return match.group(1) if match else ''
 
 
 def _expand_codex_mission_turn(raw_turn):
@@ -4946,6 +4963,11 @@ def _expand_codex_mission_turn(raw_turn):
             'user_chars': outer.get('user_chars') or len(text),
             'user_tokens_est': outer.get('user_tokens_est') or estimate_tokens(text),
             'assistant_message_count': outer.get('assistant_message_count') or 0,
+            'assistant_text': outer.get('assistant_text') or '',
+            'tool_call_count': outer.get('tool_call_count') or 0,
+            'tool_success_count': outer.get('tool_success_count') or 0,
+            'tool_failure_count': outer.get('tool_failure_count') or 0,
+            'task_error': outer.get('task_error') or '',
             'model_key': outer.get('model_key') or '',
             'model_id': outer.get('model_id') or '',
             'reasoning_effort': outer.get('reasoning_effort') or '',
@@ -4978,7 +5000,17 @@ def _expand_codex_mission_turn(raw_turn):
             'user_tokens_est': _safe_nonnegative_int(message.get('user_tokens_est')) or estimate_tokens(text),
             'user_message_count': 1,
             'assistant_message_count': _safe_nonnegative_int(message.get('assistant_message_count')),
+            'assistant_text': str(message.get('assistant_text') or outer.get('assistant_text') or '')[-4000:],
+            'tool_call_count': _safe_nonnegative_int(message.get('tool_call_count')),
+            'tool_success_count': _safe_nonnegative_int(message.get('tool_success_count')),
+            'tool_failure_count': _safe_nonnegative_int(message.get('tool_failure_count')),
+            'task_error': str(message.get('task_error') or outer.get('task_error') or '')[-2000:],
         })
+        delegation_parent = _codex_delegation_source_thread_id(text)
+        if delegation_parent:
+            logical['parent_thread_id'] = delegation_parent
+            logical['thread_source'] = 'subagent'
+            logical['is_subagent'] = True
         logical.pop('user_messages', None)
         logical_turns.append(logical)
     return logical_turns
@@ -4994,6 +5026,28 @@ def _valid_codex_mission_turns_cache_entry(entry):
         return False
     return all(isinstance(turn_id, str) and isinstance(turn, dict)
                for turn_id, turn in entry['turns'].items())
+
+
+def _codex_tool_output_failed(value):
+    """Classify only explicit tool failures; unknown output remains successful evidence."""
+    if isinstance(value, (dict, list)):
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except Exception:
+            text = str(value)
+    else:
+        text = str(value or '')
+    clean = _codex_plain_text(text)
+    if not clean:
+        return False
+    if re.search(r'process exited with code\s+[1-9]\d*', clean):
+        return True
+    if re.search(r'exit[_ ]code[\\\"\']*\s*[:=]\s*[1-9]\d*', clean):
+        return True
+    return any(marker in clean for marker in (
+        '"iserror": true', '"status": "failed"', 'blocked by policy',
+        'command rejected', 'tool call failed', 'script failed',
+    ))
 
 
 def _codex_mission_scan_roots(sessions_dir=None):
@@ -5013,7 +5067,7 @@ def _codex_mission_scan_roots(sessions_dir=None):
 
 def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                              max_files=500, max_dirs=1200, max_entries=25000,
-                             max_file_size=500*1024*1024, max_total_bytes=2*1024*1024*1024,
+                             max_file_size=500*1024*1024, max_total_bytes=4*1024*1024*1024,
                              max_line_bytes=10*1024*1024):
     """Incrementally index user-visible Codex turns without duplicating token accounting."""
     roots, default_scan = _codex_mission_scan_roots(sessions_dir)
@@ -5248,8 +5302,46 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                         if turn:
                             turn['completed'] = not bool(payload.get('error'))
                             turn['completed_at'] = _codex_timestamp_iso(payload.get('completed_at') or timestamp)
+                            if payload.get('error'):
+                                error = payload.get('error')
+                                if isinstance(error, dict):
+                                    error = error.get('message') or error.get('additionalDetails') or error
+                                turn['task_error'] = str(error or '')[-2000:]
+                                messages = turn.get('user_messages')
+                                if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
+                                    messages[-1]['task_error'] = turn['task_error']
                         if turn_id == current_task_id:
                             current_task_id = ''
+                        continue
+
+                    if (item_type == 'response_item' and
+                            payload_type in ('function_call', 'custom_tool_call')):
+                        metadata = payload.get('internal_chat_message_metadata_passthrough')
+                        metadata = metadata if isinstance(metadata, dict) else {}
+                        turn_id = str(metadata.get('turn_id') or current_task_id or '')
+                        turn = ensure_turn(turn_id, timestamp)
+                        if turn:
+                            turn['tool_call_count'] = _safe_nonnegative_int(turn.get('tool_call_count')) + 1
+                            messages = turn.get('user_messages')
+                            if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
+                                messages[-1]['tool_call_count'] = (
+                                    _safe_nonnegative_int(messages[-1].get('tool_call_count')) + 1
+                                )
+                        continue
+
+                    if (item_type == 'response_item' and
+                            payload_type in ('function_call_output', 'custom_tool_call_output')):
+                        metadata = payload.get('internal_chat_message_metadata_passthrough')
+                        metadata = metadata if isinstance(metadata, dict) else {}
+                        turn_id = str(metadata.get('turn_id') or current_task_id or '')
+                        turn = ensure_turn(turn_id, timestamp)
+                        if turn:
+                            failed = _codex_tool_output_failed(payload.get('output'))
+                            field = 'tool_failure_count' if failed else 'tool_success_count'
+                            turn[field] = _safe_nonnegative_int(turn.get(field)) + 1
+                            messages = turn.get('user_messages')
+                            if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
+                                messages[-1][field] = _safe_nonnegative_int(messages[-1].get(field)) + 1
                         continue
 
                     if item_type == 'response_item' and payload_type == 'message':
@@ -5275,6 +5367,10 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                                         'user_chars': len(message),
                                         'user_tokens_est': estimate_tokens(message),
                                         'assistant_message_count': 0,
+                                        'tool_call_count': 0,
+                                        'tool_success_count': 0,
+                                        'tool_failure_count': 0,
+                                        'task_error': '',
                                         'model_key': str(turn.get('model_key') or ''),
                                         'model_id': str(turn.get('model_id') or ''),
                                         'reasoning_effort': str(turn.get('reasoning_effort') or ''),
@@ -5282,11 +5378,19 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                                     })
                         elif role == 'assistant':
                             turn['assistant_message_count'] = _safe_nonnegative_int(turn.get('assistant_message_count')) + 1
+                            assistant_text = _codex_message_text(payload)
+                            if assistant_text:
+                                # Keep only the final user-visible conclusion for each
+                                # logical request.  The classifier needs completion and
+                                # caveat evidence, not the model's full progress stream.
+                                turn['assistant_text'] = assistant_text[-4000:]
                             messages = turn.get('user_messages')
                             if isinstance(messages, list) and messages and isinstance(messages[-1], dict):
                                 messages[-1]['assistant_message_count'] = (
                                     _safe_nonnegative_int(messages[-1].get('assistant_message_count')) + 1
                                 )
+                                if assistant_text:
+                                    messages[-1]['assistant_text'] = assistant_text[-4000:]
         except Exception:
             discovery_truncated = True
             continue
@@ -5476,62 +5580,123 @@ def _codex_task_categories(text, cwd=''):
     path_text = _codex_plain_text(cwd).replace('\\', '/')
     scores = {}
 
+    def contains(token):
+        return re.search(
+            rf'(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])',
+            prompt_text,
+        ) is not None
+
+    def contains_any(tokens):
+        return any(contains(token) for token in tokens)
+
     def add(category, score):
         scores[category] = max(scores.get(category, 0), score)
 
-    if any(token in path_text for token in ('trading', 'backtest', 'forex', 'market-replay')):
+    if any(token in path_text for token in ('trading', 'backtest', 'forex', 'market-replay', 'gbpusd')):
         add('trading_setup', 3)
-    if any(token in prompt_text for token in ('trading setup', 'setup giao dich', 'giao dich', 'backtest',
-                                            'market replay', 'stop loss', 'take profit', 'risk management',
-                                            'quan ly rui ro', 'out of sample', 'oos', 'lenh giao dich')):
+    if contains_any(('trading setup', 'setup giao dich', 'giao dich', 'backtest',
+                     'market replay', 'stop loss', 'take profit', 'risk management',
+                     'quan ly rui ro', 'out of sample', 'oos', 'lenh giao dich',
+                     'gbpusd',
+                     'tp2', 'tp3', 'entry pullback', 'trailing sl', 'lookback',
+                     'rpnl', 'plateau', 'fvg', 'bos', 'giai lenh', 'lenh nay',
+                     'dinh nay', 'day nay', 'chon tp', 'filter 2 cot', 'filter 3 cot')):
         add('trading_setup', 3)
 
-    if any(token in path_text for token in ('cockpit360', 'su-30', 'su30')):
+    # SU-30 is a subject domain, not evidence that the task is a 3D simulation.
+    # Treat only the dedicated cockpit workspace or explicit 3D language as 3D;
+    # otherwise OCR/Word/PDF work under an SU-30 folder is a document task.
+    if 'cockpit360' in path_text:
         add('simulation_3d', 3)
-    if any(token in prompt_text for token in ('mo phong 3d', 'cockpit360', 'three.js', 'threejs',
-                                            'viewport 3d', 'hotspot 3d', 'buong lai 3d')):
+    if contains_any(('mo phong 3d', 'cockpit360', 'three.js', 'threejs',
+                     'viewport 3d', 'hotspot 3d', 'buong lai 3d',
+                     'buong lai tuong tac', 'panel 31', 'panel 18')):
         add('simulation_3d', 3)
 
     # A workspace path is useful context, but it must not hide another explicit
     # function in the prompt (for example document repair + permission diagnosis).
     if 'usage-tracker' in path_text:
         add('web', 2)
-    if 'usage tracker' in prompt_text or any(
-        token in prompt_text for token in ('lam web', 'website', 'dashboard', 'frontend', 'giao dien web',
-                                        'html', 'css', 'javascript', 'bieu do', 'bang xep hang model')
+    if contains('usage tracker') or contains_any(
+        ('lam web', 'website', 'dashboard', 'frontend', 'giao dien web',
+         'html', 'css', 'javascript', 'bieu do', 'bang xep hang model')
     ):
         add('web', 3)
 
-    if any(token in prompt_text for token in (
+    document_terms = (
         'docx', 'microsoft word', 'file word', 'pdf', 'ocr', 'unicode', 'vni', 'bien ban',
         'tai lieu', 'spreadsheet', 'excel', 'slide', 'ho so', 'ly lich', 'que quan',
-        'trinh do', 'cap hoc', 'dong chi', 'nhan su',
-    )):
+        'cap hoc', 'dong chi', 'nhan su',
+        'su30', 'su-30', 'su 30', 'ho so dang vien', 'ly lich dang vien',
+        'bien dich', 'chuyen doi font', 'loi font',
+    )
+    has_education_level = (
+        'trình độ' in unicodedata.normalize('NFC', str(text or '').lower()) or
+        re.search(r'(?<!chuong )(?<!chương )\btrinh do\b', prompt_text) is not None
+    )
+    if contains_any(document_terms) or has_education_level:
         add('documents', 3)
 
-    if any(token in prompt_text for token in (
+    if contains_any((
         'wifi', 'o dia', 'chkdsk', 'windows', 'listener', 'cong 5050', 'server khong chay',
         'mat ket noi', 'chan doan he thong', 'rate limit khong cap nhat', 'quyen doc',
         'quyen ghi', 'chan quyen', 'permission denied', 'permission', 'filesystem',
         'sandbox', 'command rejected', 'khong doc duoc', 'khong ghi duoc',
+        'usb', 'adb', 'xiaomi', 'sac nhanh', 'man hinh den', 'gpu', 'quat tan nhiet',
+        'o cung', 'o dia c', 'disk cleanup', 'wireless debug', 'android',
+        'cache chrome', 'cache capcut', 'dung luong dia', 'giai phong dung luong',
     )):
         add('system_diagnostics', 3)
 
-    if any(token in prompt_text for token in ('gpt 6 astra', 'model astra', 'suy luan',
-                                            'reasoning effort', 'model reasoning')):
+    if contains_any(('gpt 6 astra', 'model astra', 'suy luan',
+                     'reasoning effort', 'model reasoning')):
         add('research', 3)
-    if any(token in prompt_text for token in ('nghien cuu', 'tra cuu', 'kiem chung', 'xac minh nguon',
-                                            'so sanh model', 'danh gia model', 'bai viet tren x',
-                                            'artificial analysis')):
+    if contains_any(('nghien cuu', 'tra cuu', 'kiem chung', 'xac minh nguon',
+                     'so sanh model', 'danh gia model', 'bai viet tren x',
+                     'artificial analysis', 'han muc', 'gia token', 'cache hit',
+                     'chatgpt plus', 'codex free', 'provider', 'context window',
+                     'reasoning effort', 'model nao', 'codex auto review',
+                     'cua so ngu canh', 'do dai ngu canh', 'token duoc ko',
+                     'computer use', 'lam ngam')):
         add('research', 2)
 
-    if any(token in prompt_text for token in ('github', 'git la sao', 'git repo')):
+    if contains_any(('github', 'git la sao', 'git repo')):
         add('software_debugging', 3)
-    if any(token in prompt_text for token in (
+    if contains_any((
         'sua loi phan mem', 'loi phan mem', 'bug', 'refactor', 'unit test', 'test suite',
-        'ma nguon', 'lap trinh', 'python', 'repository', 'stack trace', 'exception',
+        'ma nguon', 'lap trinh', 'stack trace', 'exception', 'codex web gpt',
+        'chatgpt web', 'stream disconnected', 'launcher', 'runtime', 'bridge',
+        'connector', 'compaction', 'remote compact', 'context handoff', 'turn id',
     )):
         add('software_debugging', 2)
+    if contains('python') and contains_any((
+        'script', 'chuong trinh', 'ma nguon', 'lap trinh', 'sua code', 'chay code',
+    )):
+        add('software_debugging', 2)
+    if contains('repository') and contains_any(('source', 'code', 'ma nguon', 'git')):
+        add('software_debugging', 2)
+    if (contains_any((
+            'gioi han context', 'context 80k', 'context 160k', 'context 200k',
+            'context 240k', 'context 80 k', 'context 240 k',
+        )) and contains_any((
+            'chinh sua', 'chinh lai', 'cap nhat', 'cai dat', 'file',
+        ))):
+        # Editing Codex context configuration is maintenance of the local
+        # software/runtime setup, rather than research about model context.
+        add('software_debugging', 3)
+
+    # Prompts that design Usage Tracker's own classifier often quote task-type
+    # examples. Those examples are training material for the web feature, not
+    # simultaneous document/diagnostic/3D work in the current mission.
+    tracker_classifier_work = (
+        contains('usage tracker') and
+        contains_any((
+            'phan loai', 'loai cong viec', 'kiem tra cac nhiem vu da ghep',
+            'ma tran tong token', 'ma tran han muc', 'soft audit',
+        ))
+    )
+    if tracker_classifier_work:
+        scores = {'web': 3}
 
     if not scores:
         return ['other'], 'other', 'low', False
@@ -5557,7 +5722,7 @@ def _codex_prompt_flags(text):
     clean = _codex_plain_text(text)
     acceptance = (
         'ok', 'oke', 'okay', 'tot roi', 'dung roi', 'on roi', 'duoc roi', 'xong roi',
-        'chap nhan roi', 'cam on', 'tuyet voi',
+        'o duoc roi', 'hay qua', 'chap nhan roi', 'cam on', 'tuyet voi',
     )
     work = (
         'lam di', 'lam tiep', 'bat dau', 'nhiem vu', 'tiep theo', 'sua', 'them', 'bo sung',
@@ -5577,16 +5742,205 @@ def _codex_prompt_flags(text):
     starts_acceptance = any(clean == phrase or clean.startswith(phrase + ' ') or clean.startswith(phrase + ',')
                             for phrase in acceptance)
     has_work = any(phrase in clean for phrase in work)
-    is_followup = any(phrase in clean for phrase in followup)
+    vague_continuation = _codex_is_vague_continuation_prompt(clean)
     is_new_work = any(phrase in clean for phrase in new_work)
+    is_followup = (
+        any(phrase in clean for phrase in followup) or
+        vague_continuation or
+        (starts_acceptance and has_work and not is_new_work)
+    )
     acceptance_only = starts_acceptance and not has_work and len(clean) <= 220
-    acceptance_plus_work = starts_acceptance and has_work
+    acceptance_plus_work = starts_acceptance and has_work and is_new_work
     return {
         'acceptance_only': acceptance_only,
         'acceptance_plus_work': acceptance_plus_work,
         'followup': is_followup,
         'new_work': is_new_work,
+        'manual_user_repair': _codex_is_manual_user_repair_signal(clean),
+        'informational_question': _codex_is_informational_question(clean),
     }
+
+
+def _codex_is_manual_user_repair_signal(text):
+    """Detect only explicit claims that the user finished the failed work by hand."""
+    clean = _codex_plain_text(text)
+    return any(phrase in clean for phrase in (
+        'toi da tu sua bang tay', 'toi tu sua bang tay',
+        'toi da tu lam bang tay', 'toi tu lam bang tay',
+        'toi da tu sua xong', 'toi tu sua xong',
+        'toi phai tu sua bang tay', 'toi phai tu lam bang tay',
+    ))
+
+
+def _codex_is_informational_question(text):
+    """Recognize answerable questions without treating implementation requests as Q&A."""
+    clean = _codex_plain_text(text)
+    if not clean:
+        return False
+    action_terms = (
+        'hay sua', 'sua cho toi', 'hay tao', 'tao cho toi', 'hay cap nhat',
+        'cap nhat cho toi', 'hay xoa', 'xoa cho toi', 'hay chuyen',
+        'chuyen cho toi', 'bat dau lam', 'trien khai', 'xay them',
+    )
+    if any(term in clean for term in action_terms):
+        return False
+    if any(term in clean for term in (
+        'toi muon hoi', 'toi hoi cai', 'cho toi hoi', 'toi can hoi',
+        'la gi', 'nghia la gi', 'tai sao', 'vi sao', 'the nao',
+        'bao nhieu', 'co phai', 'dung ko', 'dung khong',
+    )):
+        return True
+    # Quota/accounting questions often quote the words used in an earlier
+    # correction (for example "sua lai") while only asking how that old work
+    # should be charged.  They are evidence about a repair, not a new repair
+    # request themselves.
+    if _codex_is_quota_accounting_question(clean):
+        return True
+    return bool(re.search(r'\bco\b.{0,100}\b(?:duoc|the|phai)\b.{0,60}\b(?:ko|khong)\b', clean))
+
+
+def _codex_is_quota_accounting_question(text):
+    clean = _codex_plain_text(text)
+    if any(clean.startswith(prefix) for prefix in (
+        'ban lam tiep', 'lam tiep', 'tiep tuc', 'ban tiep tuc', 'sao ban dung',
+    )):
+        return False
+    return bool(
+        any(term in clean for term in ('han muc', 'token', 'chi phi', 'credit')) and
+        any(term in clean for term in (
+            'bi tru', 'cong vao', 'tinh vao', 'tieu hao', 'ton hon', 'he so',
+        )) and
+        (clean.endswith(' nhi') or clean.endswith(' ko') or clean.endswith(' khong'))
+    )
+
+
+def _codex_assistant_completion_signal(text):
+    """Return strong completion evidence from the final assistant message only."""
+    clean = _codex_plain_text(text)
+    if not clean:
+        return False
+    incomplete = (
+        'chua hoan tat', 'chua lam xong', 'chua sua xong', 'chua the hoan tat',
+        'khong the hoan tat', 'chua co du bang chung', 'chua co ket qua',
+        'chua truc tiep kiem tra', 'chua truc tiep thu', 'can ban xac nhan',
+        'can kiem tra tren dien thoai', 'can thu tren dien thoai',
+    )
+    if any(phrase in clean for phrase in incomplete):
+        return False
+    return any(phrase in clean for phrase in (
+        'da hoan tat', 'da lam xong', 'da sua xong', 'da cap nhat xong',
+        'xong roi', 'toan bo kiem tra', 'tat ca kiem tra',
+        'test deu pass', 'tests deu pass', 'regression pass',
+    ))
+
+
+def _codex_turn_infrastructure_blocked(turn):
+    """Detect explicit tool/bridge unavailability only when no tool succeeded."""
+    if _safe_nonnegative_int(turn.get('tool_success_count')) > 0:
+        return False
+    clean = _codex_plain_text(
+        f"{turn.get('task_error') or ''} {turn.get('assistant_text') or ''}"
+    )
+    return any(phrase in clean for phrase in (
+        'khong co phien cong cu thao tac',
+        'chua co kenh cong cu thao tac',
+        'khong goi duoc tool',
+        'can ban mo lai task co quyen',
+        'stream disconnected before completion',
+        'launcher browser control channel failed',
+        'chatgpt browser is busy',
+        'rate limit exceeded',
+        'usage limit reached',
+        'het han muc nen khong',
+    ))
+
+
+def _codex_infer_terminal_status(raw_mission):
+    """Infer only strong terminal outcomes; ambiguous work remains unresolved."""
+    turns = list(raw_mission.get('turns') or [])
+    if not turns:
+        return None
+    last = turns[-1]
+    assistant_text = str(last.get('assistant_text') or '')
+    has_answer = bool(
+        assistant_text.strip() and
+        _safe_nonnegative_int(last.get('assistant_message_count')) > 0
+    )
+    if not has_answer:
+        return None
+    if _codex_assistant_completion_signal(assistant_text):
+        return 'accepted_inferred', 'medium'
+    first_text = str(turns[0].get('user_text') or '')
+    no_correction = not any(
+        _codex_is_repair_prompt(turn.get('user_text') or '')
+        for turn in turns[1:]
+    )
+    if no_correction and _codex_is_informational_question(first_text):
+        return 'accepted_inferred', 'medium'
+    return None
+
+
+def _codex_is_non_task_prompt(text):
+    """Ignore pure greetings/connectivity pings without hiding substantive prompts."""
+    clean = _codex_plain_text(text)
+    clean = re.sub(r'[^a-z0-9]+', ' ', clean).strip()
+    return bool(re.fullmatch(
+        r'(?:xin chao|chao ban|hello|helo|hi|alo|a lo|h[eu]+l+[eo]+)',
+        clean,
+    ))
+
+
+def _codex_is_vague_continuation_prompt(text):
+    clean = re.sub(r'[^a-z0-9]+', ' ', _codex_plain_text(text)).strip()
+    if len(clean) > 90:
+        return False
+    return bool(re.fullmatch(
+        r'(?:(?:ok|oke|okay) )?(?:the |gio )?(?:ban )?'
+        r'(?:(?:lam|sua|kiem tra)(?: tiep)?(?: di)?(?: nhe| nha| ne)?|'
+        r'bat dau(?: lam)?(?: tiep)?(?: di)?(?: nhe| nha| ne)?|'
+        r'lam gi tiep theo day)',
+        clean,
+    ) or re.fullmatch(
+        r'(?:sao )?(?:ban )?(?:dang )?(?:test|kiem tra|lam)(?: cai)? gi ma lau(?: the)?',
+        clean,
+    ))
+
+
+def _codex_is_explicit_continuation_prompt(text):
+    """Return true when the user explicitly resumes the earlier objective."""
+    raw = str(text or '').lstrip().lower()
+    if raw.startswith('<codex_internal_context') and 'source="goal"' in raw[:160]:
+        return True
+    if _codex_is_vague_continuation_prompt(text):
+        return True
+    clean = re.sub(r'[^a-z0-9:/._-]+', ' ', _codex_plain_text(text)).strip()
+    if any(clean.startswith(prefix) for prefix in (
+        'ban lam tiep', 'lam tiep', 'tiep tuc', 'ban tiep tuc', 'hay tiep tuc',
+        'ban co lam tiep', 'co lam tiep nhiem vu nay',
+        'hom bua dang lam', 'hom bua lam chua xong', 'nhiem vu vua roi',
+        'cong viec vua roi', 'phan vua roi', 'ban dang do',
+        'ok hom bua dang lam do', 'hom bua dang lam do',
+    )):
+        return True
+    if ('codex://threads/' in clean and
+            any(term in clean for term in ('tiep tuc', 'lam tiep', 'cong viec dang do'))):
+        return True
+    return bool(
+        any(term in clean for term in (
+            'het han muc', 'co han muc lai', 'han muc lai roi', 'bi tat may', 'mat dien',
+        )) and
+        any(term in clean for term in (
+            'ban lam tiep', 'gio ban lam tiep', 'gio ban chay tiep', 'tiep tuc',
+        ))
+    )
+
+
+def _codex_is_embedded_classification_example(text):
+    clean = _codex_plain_text(text)
+    return (
+        ('vi du' in clean or 'truong hop lai' in clean or 'luot 1' in clean) and
+        ('review lai tung mau' in clean or 'phan loai' in clean or 'loai cong viec' in clean)
+    )
 
 
 def _codex_usage_by_turn(recent_events, logical_turns=None):
@@ -5694,6 +6048,42 @@ def _codex_finalize_mission(raw_mission, reviews):
             raw_categories.append(raw_category)
     if category in CODEX_TASK_CATEGORY_KEYS and category not in raw_categories:
         raw_categories.insert(0, category)
+    known_categories = [key for key in raw_categories if key != 'other']
+    if known_categories:
+        # A vague opening such as “can you read that chat?” may be classified
+        # only after a later concrete turn names the actual work. Backfill only
+        # low-confidence `other` turns from the nearest concrete turn so their
+        # tokens are attributed to the resolved mission instead of reopening a
+        # hard review case.
+        for index, turn in enumerate(turns):
+            if turn.get('category') != 'other':
+                continue
+            nearest = None
+            for distance in range(1, len(turns) + 1):
+                for candidate_index in (index - distance, index + distance):
+                    if not 0 <= candidate_index < len(turns):
+                        continue
+                    candidate = turns[candidate_index]
+                    candidate_category = candidate.get('category')
+                    if candidate_category in CODEX_TASK_CATEGORY_KEYS and candidate_category != 'other':
+                        nearest = candidate
+                        break
+                if nearest is not None:
+                    break
+            inherited_categories = list(
+                (nearest or {}).get('categories') or
+                ([nearest.get('category')] if nearest else known_categories[:1])
+            )
+            inherited_categories = [key for key in inherited_categories if key != 'other'] or known_categories[:1]
+            turn['category'] = inherited_categories[0]
+            turn['categories'] = inherited_categories
+            turn['category_confidence'] = 'medium'
+            turn['category_ambiguous'] = len(inherited_categories) > 1
+            turn['category_inherited'] = True
+        raw_categories = known_categories
+        if category == 'other':
+            category = known_categories[0]
+            category_confidence = 'medium'
     review_categories = []
     if isinstance(review.get('categories'), list):
         for raw_category in review.get('categories') or []:
@@ -5715,10 +6105,37 @@ def _codex_finalize_mission(raw_mission, reviews):
     outcome = review.get('outcome')
     if outcome == 'accepted':
         status, status_confidence = 'accepted_manual', 'high'
+    elif outcome == 'inferred':
+        # The user no longer remembers the result, but the local history shows
+        # a completed answer with no correction, objection or repair follow-up.
+        # Keep that weaker evidence distinct from a direct confirmation.
+        status, status_confidence = 'accepted_inferred_review', 'medium'
     elif outcome == 'unresolved':
         status, status_confidence = 'unresolved_manual', 'high'
     elif outcome == 'abandoned':
         status, status_confidence = 'abandoned_manual', 'high'
+    elif outcome == 'user_repaired':
+        status, status_confidence = 'failed_user_repaired_manual', 'high'
+    elif outcome == 'excluded':
+        status, status_confidence = 'excluded_manual', 'high'
+
+    tool_call_count = sum(_safe_nonnegative_int(turn.get('tool_call_count')) for turn in turns)
+    tool_success_count = sum(_safe_nonnegative_int(turn.get('tool_success_count')) for turn in turns)
+    tool_failure_count = sum(_safe_nonnegative_int(turn.get('tool_failure_count')) for turn in turns)
+    infrastructure_exclusion_reason = ''
+    if outcome not in CODEX_MISSION_OUTCOME_OVERRIDES and tool_success_count <= 0:
+        has_assistant_response = any(
+            _safe_nonnegative_int(turn.get('assistant_message_count')) > 0
+            for turn in turns
+        )
+        if not has_assistant_response:
+            status, status_confidence = 'excluded_no_response_auto', 'high'
+            infrastructure_exclusion_reason = 'no_model_response'
+        elif (any(_codex_turn_infrastructure_blocked(turn) for turn in turns) and
+              not any(_codex_assistant_completion_signal(turn.get('assistant_text') or '')
+                      for turn in turns)):
+            status, status_confidence = 'excluded_infrastructure_auto', 'high'
+            infrastructure_exclusion_reason = 'tool_or_bridge_unavailable'
 
     totals = {
         'input_tokens': 0, 'cached_input_tokens': 0, 'cache_write_input_tokens': 0,
@@ -5773,6 +6190,7 @@ def _codex_finalize_mission(raw_mission, reviews):
         'status': status,
         'status_confidence': status_confidence,
         'accepted': accepted,
+        'user_repaired': status.startswith('failed_user_repaired'),
         'accepted_at': str(raw_mission.get('accepted_at') or ''),
         'reviewed': bool(review),
         'category_reviewed': bool(review_categories) or review.get('category') in CODEX_TASK_CATEGORY_KEYS,
@@ -5781,6 +6199,7 @@ def _codex_finalize_mission(raw_mission, reviews):
             'manual' if isinstance(review.get('repair_of_anchor_turn_id'), str)
             else ('none' if 'repair_of_anchor_turn_id' in review else 'auto')
         ),
+        'inferred_boundary_reason': str(raw_mission.get('inferred_boundary_reason') or ''),
         'repair_of_anchor_turn_id_override': (
             str(review.get('repair_of_anchor_turn_id') or '')
             if isinstance(review.get('repair_of_anchor_turn_id'), str) else None
@@ -5794,6 +6213,11 @@ def _codex_finalize_mission(raw_mission, reviews):
         'initial_instruction_tokens_est': _safe_nonnegative_int(turns[0].get('user_tokens_est')),
         'added_guidance_tokens_est': sum(_safe_nonnegative_int(turn.get('user_tokens_est')) for turn in turns[1:]),
         'user_messages': sum(_safe_nonnegative_int(turn.get('user_message_count')) for turn in turns),
+        'tool_call_count': tool_call_count,
+        'tool_success_count': tool_success_count,
+        'tool_failure_count': tool_failure_count,
+        'infrastructure_blocked': bool(infrastructure_exclusion_reason),
+        'infrastructure_exclusion_reason': infrastructure_exclusion_reason,
         'route': route,
         'route_label': ' → '.join(route) if route else 'Không rõ model',
         'pure_model': len(set(route)) == 1 and bool(route),
@@ -5818,11 +6242,17 @@ def _codex_finalize_mission(raw_mission, reviews):
             'category_confidence': str(turn.get('category_confidence') or 'low'),
             'category_ambiguous': bool(turn.get('category_ambiguous')),
             'category_inherited': bool(turn.get('category_inherited')),
+            'category_from_assistant': bool(turn.get('category_from_assistant')),
+            'completion_signal': _codex_assistant_completion_signal(turn.get('assistant_text') or ''),
             'prompt': re.sub(r'\s+', ' ', str(turn.get('user_text') or '')).strip()[:320],
             'user_tokens_est': _safe_nonnegative_int(turn.get('user_tokens_est')),
             'total_tokens': _safe_nonnegative_int((turn.get('usage') or {}).get('total_tokens')),
             'cost_known': (turn.get('usage') or {}).get('cost_known') is not False,
             'cost_usd': round(float((turn.get('usage') or {}).get('cost_usd') or 0.0), 6),
+            'tool_call_count': _safe_nonnegative_int(turn.get('tool_call_count')),
+            'tool_success_count': _safe_nonnegative_int(turn.get('tool_success_count')),
+            'tool_failure_count': _safe_nonnegative_int(turn.get('tool_failure_count')),
+            'task_error': str(turn.get('task_error') or '')[-500:],
             'model_totals': [
                 {
                     'model_key': str(item.get('model_key') or 'unknown'),
@@ -5835,6 +6265,12 @@ def _codex_finalize_mission(raw_mission, reviews):
             ],
         } for turn in turns],
     }
+    mission['referenced_thread_ids'] = sorted({
+        ref
+        for turn in mission['turns']
+        for ref in _codex_referenced_thread_ids(turn.get('prompt') or '')
+        if ref != mission['thread_id']
+    })
     return mission
 
 
@@ -5845,7 +6281,13 @@ def _is_sol_high_baseline(model_key):
 
 def _codex_mission_usable_for_matrix(mission):
     status = str(mission.get('status') or '')
-    if status.startswith('abandoned'):
+    if status.startswith('excluded'):
+        return False
+    # A failed attempt becomes usable evidence when a later mission explicitly
+    # repairs the same goal. This keeps the failed usage in the final
+    # cost-to-acceptance chain instead of silently dropping it.
+    if status.startswith('abandoned') and not _safe_nonnegative_int(
+            mission.get('repair_followup_received_tokens')):
         return False
     if _safe_nonnegative_int(mission.get('total_tokens')) <= 0:
         return False
@@ -5859,7 +6301,11 @@ def _codex_mission_usable_for_matrix(mission):
     if mission.get('pure_model') is False:
         mission_id = str(mission.get('id') or '')
         repair_of = str(mission.get('repair_of_mission_id') or '')
-        return bool(mission.get('repair_penalty_events') or (repair_of and repair_of == mission_id))
+        return bool(
+            _safe_nonnegative_int(mission.get('repair_followup_received_tokens')) or
+            mission.get('repair_penalty_events') or
+            (repair_of and repair_of == mission_id)
+        )
 
     # Legacy/manual fixtures may predate the pure_model field.  Infer purity
     # conservatively from the model evidence instead of dropping them.
@@ -5882,12 +6328,105 @@ def _codex_mission_usable_for_matrix(mission):
 
 
 def _codex_is_repair_prompt(text):
-    clean = _codex_plain_text(text)
-    return any(token in clean for token in (
-        'chua on', 'chua dung', 'khong dung', 'van sai', 'sai roi', 'sua lai',
-        'lam lai', 'chua sua', 'van chua', 'chua duoc', 'khong on', 'fix lai',
-        'chua chinh xac', 'khong chinh xac', 'sua chua dung', 'sua chua on',
+    """Return only actionable evidence that an earlier result needs repair.
+
+    Accent stripping makes Vietnamese ``dung`` ambiguous: it can mean either
+    "correct" (đúng) or "use" (dùng).  Broad substring checks therefore used
+    to misread constraints such as "không dùng dữ liệu cũ" and observations
+    such as "chưa dùng hết CPU" as failed work.  Prefer accent-aware evidence,
+    then use a narrow fallback for genuinely unaccented prompts.
+    """
+    raw = unicodedata.normalize('NFC', str(text or '').lower())
+    raw = re.sub(r'\s+', ' ', raw).strip()
+    clean = _codex_plain_text(raw)
+    if not clean:
+        return False
+
+    user_completed_repair = any(token in clean for token in (
+        'toi vua lam lai', 'toi da lam lai', 'toi vua sua lai', 'toi da sua lai',
+        'toi vua tu sua', 'toi da tu sua',
     ))
+    model_repair_request = bool(re.search(
+        r'\bban\s+(?:hay\s+)?(?:sua|lam lai|kiem tra lai|khac phuc)\b|\b(?:sua|lam lai)\s+cho toi\b',
+        clean,
+    ))
+    if user_completed_repair and not model_repair_request:
+        return False
+
+    if any(token in raw for token in (
+        'chưa ổn', 'chưa đúng', 'không đúng', 'vẫn sai', 'sai rồi', 'sửa lại',
+        'làm lại', 'chưa sửa', 'chưa được', 'không ổn', 'fix lại',
+        'chưa chính xác', 'không chính xác', 'sửa chưa đúng', 'sửa chưa ổn',
+        'đâu mất tiêu', 'biến mất hết',
+    )):
+        return True
+
+    # These forms remain unambiguous after accent removal.
+    if any(token in clean for token in (
+        'chua on', 'van sai', 'sai roi', 'sua lai', 'lam lai', 'chua sua',
+        'chua duoc', 'khong on', 'fix lai', 'chua chinh xac',
+        'khong chinh xac', 'sua chua on', 'dau mat tieu', 'bien mat het',
+    )):
+        return True
+
+    # Preserve support for users who type without accents while rejecting
+    # "chua dung het" / "khong dung <object>" instruction clauses.
+    if re.search(r'\b(?:chua|khong) dung(?:\s*[,.;!?]|\s*$)', raw):
+        return True
+    if re.search(r'\b(?:chua|khong) dung\s+(?:roi|lam|nhu|o|cho)\b', clean):
+        return True
+
+    # "Vẫn chưa" is useful only when it names a failed result.  A bare
+    # "vẫn chưa đưa lên GitHub" is normally a constraint, not repair evidence.
+    return bool(re.search(
+        r'\bvan chua\s+(?:duoc|xong|sua|on|dung|chinh xac|hien|load|cap nhat|chay|hoat dong|tim|ra)\b',
+        clean,
+    ))
+
+
+def _codex_turn_primary_model_hint(turn):
+    if not isinstance(turn, dict):
+        return ''
+    usage = turn.get('usage') if isinstance(turn.get('usage'), dict) else {}
+    route = [str(item) for item in (usage.get('route') or []) if str(item)]
+    if route:
+        return route[-1]
+    return str(turn.get('model_key') or '')
+
+
+def _codex_is_cross_model_new_action_transition(text, previous_text, model_changed):
+    """Detect a concrete new objective after a completed Q&A/model handoff.
+
+    This is deliberately narrower than the normal ``new_work`` vocabulary.
+    It handles prompts such as "ok giờ bạn đem bản mới sang folder public" but
+    leaves plan approvals and vague continuations ("ok giờ làm tiếp") inside
+    their existing mission.
+    """
+    if not model_changed or not _codex_is_informational_question(previous_text):
+        return False
+    clean = _codex_plain_text(text)
+    if not re.match(r'^(?:ok\s*,?\s*)?gio ban\b', clean):
+        return False
+    if any(token in clean for token in (
+        'lam tiep', 'tiep tuc', 'chay tiep', 'chay xem', 'thu xem',
+        'thuc hien tiep', 'cong viec chua', 'bat tay sua',
+    )):
+        return False
+    return bool(re.search(
+        r'\bgio ban\s+(?:hay\s+)?(?:dem|dua|chuyen|sao chep|cap nhat|tao|xay|them)\b',
+        clean,
+    ))
+
+
+def _codex_referenced_thread_ids(text):
+    return {
+        match.lower()
+        for match in re.findall(
+            r'codex://threads/([0-9a-f]{8}-[0-9a-f-]{20,})',
+            str(text or ''),
+            flags=re.IGNORECASE,
+        )
+    }
 
 
 _CODEX_REPAIR_TOPIC_STOPWORDS = {
@@ -5916,6 +6455,8 @@ def _codex_repair_link_candidates(mission, prior_missions, limit=8):
     repair_tokens = _codex_repair_topic_tokens(repair_text)
     repair_categories = set(mission.get('categories') or [mission.get('category') or 'other'])
     repair_thread = str(mission.get('thread_id') or '')
+    repair_dt = _parse_iso_utc(mission.get('start_at'))
+    referenced_threads = set(mission.get('referenced_thread_ids') or [])
     ranked = []
     for recency, candidate in enumerate(reversed(prior_missions)):
         candidate_text = ' '.join([
@@ -5926,23 +6467,30 @@ def _codex_repair_link_candidates(mission, prior_missions, limit=8):
         shared = repair_tokens & candidate_tokens
         shared_numeric = {token for token in shared if any(char.isdigit() for char in token)}
         same_thread = bool(repair_thread and repair_thread == str(candidate.get('thread_id') or ''))
+        explicit_thread_reference = str(candidate.get('thread_id') or '').lower() in referenced_threads
+        candidate_dt = _parse_iso_utc(candidate.get('end_at') or candidate.get('start_at'))
+        gap_hours = (
+            max(0.0, (repair_dt - candidate_dt).total_seconds() / 3600.0)
+            if repair_dt is not None and candidate_dt is not None else None
+        )
         category_overlap = bool(
             repair_categories & set(candidate.get('categories') or [candidate.get('category') or 'other'])
         )
         # Cross-thread automatic links require distinctive shared evidence.
-        if not same_thread and len(shared) < 2 and not shared_numeric:
+        if not same_thread and not explicit_thread_reference and len(shared) < 2 and not shared_numeric:
             continue
         score = (
             (8.0 if same_thread else 0.0) +
+            (18.0 if explicit_thread_reference else 0.0) +
             (3.0 if category_overlap else 0.0) +
             min(12.0, 3.0 * len(shared)) +
             min(12.0, 6.0 * len(shared_numeric)) +
             max(0.0, 2.0 - 0.08 * recency)
         )
-        ranked.append((score, len(shared), bool(shared_numeric), recency, candidate))
+        ranked.append((score, len(shared), bool(shared_numeric), recency, gap_hours, candidate))
     ranked.sort(key=lambda item: (-item[0], -item[1], item[3]))
     result = []
-    for score, shared_count, has_numeric, _, candidate in ranked[:max(1, int(limit or 8))]:
+    for score, shared_count, has_numeric, _, gap_hours, candidate in ranked[:max(1, int(limit or 8))]:
         result.append({
             'mission_id': candidate.get('id'),
             'anchor_turn_id': candidate.get('anchor_turn_id'),
@@ -5954,6 +6502,8 @@ def _codex_repair_link_candidates(mission, prior_missions, limit=8):
             'shared_topic_tokens': shared_count,
             'has_shared_identifier': has_numeric,
             'same_thread': str(candidate.get('thread_id') or '') == repair_thread,
+            'explicit_thread_reference': explicit_thread_reference,
+            'gap_hours': round(gap_hours, 3) if gap_hours is not None else None,
         })
     return result
 
@@ -5997,6 +6547,7 @@ def _codex_apply_repair_penalties(missions):
         mission['repair_penalty_tokens'] = 0
         mission['repair_penalty_applied_to_model'] = None
         mission['repair_penalty_received_tokens'] = 0
+        mission['repair_followup_received_tokens'] = 0
         mission['repair_penalty_events'] = []
         mission['penalized_total_tokens'] = _safe_nonnegative_int(mission.get('total_tokens'))
         mission['repair_root_mission_id'] = mission.get('id')
@@ -6041,25 +6592,58 @@ def _codex_apply_repair_penalties(missions):
                 mission['repair_link_confidence'] = 'manual'
             else:
                 repair_source = None
-        elif mode != 'none' and turns and _codex_is_repair_prompt(turns[0].get('prompt') or ''):
-            strong = next((
-                item for item in candidates
-                if item.get('shared_topic_tokens', 0) >= 1 or item.get('has_shared_identifier')
+        elif (mode != 'none' and turns and
+              _safe_nonnegative_int(mission.get('total_tokens')) > 0 and
+              _codex_is_repair_prompt(turns[0].get('prompt') or '') and
+              not _codex_is_quota_accounting_question(turns[0].get('prompt') or '')):
+            explicit = next((
+                item for item in candidates if item.get('explicit_thread_reference')
             ), None)
+            repair_dt = _parse_iso_utc(mission.get('start_at'))
+            previous_dt = _parse_iso_utc(
+                (previous or {}).get('end_at') or (previous or {}).get('start_at')
+            )
+            recent_same_thread = bool(
+                previous is not None and repair_dt is not None and previous_dt is not None and
+                0 <= (repair_dt - previous_dt).total_seconds() <= 2 * 3600
+            )
+            # A correction immediately after another mission normally refers to
+            # that result. Prefer it over an older mission that happens to share
+            # more generic topic words. An explicit task link still wins.
+            if explicit:
+                strong = explicit
+            elif recent_same_thread:
+                strong = next((
+                    item for item in candidates
+                    if item.get('mission_id') == previous.get('id')
+                ), None)
+            else:
+                strong = next((
+                    item for item in candidates
+                    if item.get('same_thread') and
+                    item.get('gap_hours') is not None and
+                    item.get('gap_hours') <= 7 * 24 and
+                    (item.get('shared_topic_tokens', 0) >= 1 or
+                     item.get('has_shared_identifier'))
+                ), None)
             if strong:
                 repair_source = by_id.get(str(strong.get('mission_id') or ''))
                 repair_start = 0
                 mission['repair_link_confidence'] = (
-                    'high' if strong.get('has_shared_identifier') or strong.get('shared_topic_tokens', 0) >= 2
+                    'high' if (strong.get('explicit_thread_reference') or
+                               strong.get('has_shared_identifier') or
+                               strong.get('shared_topic_tokens', 0) >= 2 or
+                               repair_source is previous)
                     else 'medium'
                 )
-            elif previous is not None:
+            elif previous is not None and recent_same_thread:
                 repair_source = previous
                 repair_start = 0
-                mission['repair_link_confidence'] = 'low'
+                mission['repair_link_confidence'] = 'high' if recent_same_thread else 'low'
         if repair_source is None and mode != 'none' and turns:
             for turn_index, turn in enumerate(turns[1:], start=1):
-                if _codex_is_repair_prompt(turn.get('prompt') or ''):
+                if (_codex_is_repair_prompt(turn.get('prompt') or '') and
+                        not _codex_is_quota_accounting_question(turn.get('prompt') or '')):
                     repair_source = mission
                     repair_start = turn_index
                     mission['repair_link_confidence'] = 'high'
@@ -6142,6 +6726,10 @@ def _codex_apply_repair_penalties(missions):
 
         penalized_models = set()
         for ancestor in ancestors:
+            ancestor['repair_followup_received_tokens'] = (
+                _safe_nonnegative_int(ancestor.get('repair_followup_received_tokens')) +
+                _safe_nonnegative_int(mission.get('repair_tokens'))
+            )
             ancestor_model = _codex_mission_primary_model(ancestor)
             if not ancestor_model or ancestor_model in penalized_models:
                 continue
@@ -6489,35 +7077,43 @@ def _codex_apply_mission_quota_estimates(missions, quota_efficiency=None, quota_
 def _codex_collect_review_cases(missions):
     cases = []
     for mission in missions or []:
+        if str(mission.get('status') or '').startswith('excluded'):
+            mission['needs_category_review'] = False
+            mission['needs_review'] = False
+            mission['category_review_reasons'] = []
+            continue
         reasons = []
         hard_turns = []
-        if mission.get('category') == 'other':
-            reasons.append('other_category')
-        if str(mission.get('category_confidence') or 'low') == 'low':
-            reasons.append('low_category_confidence')
+        category_reviewed = bool(mission.get('category_reviewed'))
+        if not category_reviewed:
+            if mission.get('category') == 'other':
+                reasons.append('other_category')
+            if str(mission.get('category_confidence') or 'low') == 'low':
+                reasons.append('low_category_confidence')
         turns = mission.get('turns') or []
         if not turns:
             reasons.append('legacy_no_turn_detail')
-        for index, turn in enumerate(turns):
-            turn_reasons = []
-            # A tied score between multiple explicit task categories is not, by
-            # itself, a review problem.  Multi-label classification is an
-            # intentional output and the matrix can attribute the turn across
-            # those categories without forcing a human to choose one winner.
-            # Keep category_ambiguous on the turn as provenance, but reserve the
-            # review queue for genuinely weak/unknown classifications.
-            if str(turn.get('category_confidence') or 'low') == 'low':
-                turn_reasons.append('low_confidence')
-            if turn.get('category') == 'other':
-                turn_reasons.append('other_category')
-            if turn_reasons:
-                hard_turns.append({
-                    'turn_id': turn.get('turn_id'),
-                    'turn_index': index,
-                    'categories': list(turn.get('categories') or []),
-                    'reasons': turn_reasons,
-                    'prompt': turn.get('prompt') or '',
-                })
+        if not category_reviewed:
+            for index, turn in enumerate(turns):
+                turn_reasons = []
+                # A tied score between multiple explicit task categories is not, by
+                # itself, a review problem.  Multi-label classification is an
+                # intentional output and the matrix can attribute the turn across
+                # those categories without forcing a human to choose one winner.
+                # Keep category_ambiguous on the turn as provenance, but reserve the
+                # review queue for genuinely weak/unknown classifications.
+                if str(turn.get('category_confidence') or 'low') == 'low':
+                    turn_reasons.append('low_confidence')
+                if turn.get('category') == 'other':
+                    turn_reasons.append('other_category')
+                if turn_reasons:
+                    hard_turns.append({
+                        'turn_id': turn.get('turn_id'),
+                        'turn_index': index,
+                        'categories': list(turn.get('categories') or []),
+                        'reasons': turn_reasons,
+                        'prompt': turn.get('prompt') or '',
+                    })
         if hard_turns:
             reasons.append('hard_turns')
         if (mission.get('repair_of_mission_id') and
@@ -6540,6 +7136,253 @@ def _codex_collect_review_cases(missions):
                 'hard_turns': hard_turns,
             })
     return cases
+
+
+def _codex_collect_audit_cases(missions):
+    """Surface uncertain automatic decisions without reopening valid classifications.
+
+    `needs_review` is intentionally reserved for weak/unknown classifications.
+    Multi-category work, delayed continuations, and model changes are supported
+    mission shapes.  The soft layer is therefore limited to an automatic repair
+    link whose target is still uncertain.
+    """
+    cases = []
+    grouped = {}
+    patterns = {}
+    reason_weights = {
+        'hard_review': 4,
+        'auto_repair_link_not_high': 2,
+    }
+
+    for mission in missions or []:
+        if str(mission.get('status') or '').startswith('excluded'):
+            mission['audit_needed'] = False
+            mission['soft_audit_needed'] = False
+            mission['audit_score'] = 0
+            mission['audit_priority'] = None
+            mission['audit_reasons'] = []
+            mission['audit_turns'] = []
+            mission['audit_pattern_key'] = ''
+            continue
+        reasons = []
+        audit_turns = []
+        turns = mission.get('turns') or []
+        categories = list(dict.fromkeys(
+            key for key in (mission.get('categories') or [mission.get('category')])
+            if key in CODEX_TASK_CATEGORY_KEYS
+        ))
+
+        if mission.get('needs_review') or mission.get('needs_category_review'):
+            reasons.append('hard_review')
+
+        if (mission.get('repair_of_mission_id') and
+                mission.get('repair_link_mode') == 'auto' and
+                str(mission.get('repair_link_confidence') or 'low') != 'high'):
+            reasons.append('auto_repair_link_not_high')
+
+        reasons = list(dict.fromkeys(reasons))
+        soft_reasons = [reason for reason in reasons if reason != 'hard_review']
+        soft_audit_needed = bool(soft_reasons) and 'hard_review' not in reasons
+        pattern_key = '+'.join(soft_reasons) if soft_audit_needed else ''
+        score = sum(reason_weights.get(reason, 1) for reason in reasons)
+        mission['audit_needed'] = bool(reasons)
+        mission['soft_audit_needed'] = soft_audit_needed
+        mission['audit_reasons'] = reasons
+        mission['audit_pattern_key'] = pattern_key
+        mission['audit_score'] = score
+        mission['audit_priority'] = 'high' if score >= 5 else ('medium' if score >= 3 else ('low' if score else 'none'))
+        mission['audit_turns'] = audit_turns
+
+        if not reasons:
+            continue
+        case = {
+            'mission_id': mission.get('id'),
+            'anchor_turn_id': mission.get('anchor_turn_id'),
+            'title': mission.get('title'),
+            'category': mission.get('category'),
+            'categories': categories,
+            'category_confidence': mission.get('category_confidence'),
+            'score': score,
+            'priority': mission['audit_priority'],
+            'reasons': reasons,
+            'soft_audit_needed': soft_audit_needed,
+            'pattern_key': pattern_key,
+            'audit_turns': audit_turns,
+        }
+        cases.append(case)
+        for reason in reasons:
+            group = grouped.setdefault(reason, {
+                'reason': reason,
+                'mission_count': 0,
+                'max_score': 0,
+                'samples': [],
+            })
+            group['mission_count'] += 1
+            group['max_score'] = max(group['max_score'], score)
+            if len(group['samples']) < 8:
+                group['samples'].append({
+                    'mission_id': mission.get('id'),
+                    'anchor_turn_id': mission.get('anchor_turn_id'),
+                    'title': mission.get('title'),
+                    'categories': categories,
+                    'score': score,
+                })
+
+        if pattern_key:
+            pattern = patterns.setdefault(pattern_key, {
+                'key': pattern_key,
+                'reasons': list(soft_reasons),
+                'mission_count': 0,
+                'max_score': 0,
+                'samples': [],
+            })
+            pattern['mission_count'] += 1
+            pattern['max_score'] = max(pattern['max_score'], score)
+            if len(pattern['samples']) < 8:
+                pattern['samples'].append({
+                    'mission_id': mission.get('id'),
+                    'anchor_turn_id': mission.get('anchor_turn_id'),
+                    'title': mission.get('title'),
+                    'categories': categories,
+                    'score': score,
+                })
+
+    cases.sort(key=lambda item: (-item['score'], str(item.get('title') or '')))
+    groups = sorted(grouped.values(), key=lambda item: (-item['max_score'], -item['mission_count'], item['reason']))
+    pattern_groups = sorted(
+        patterns.values(),
+        key=lambda item: (-item['max_score'], -item['mission_count'], item['key']),
+    )
+    return cases, groups, pattern_groups
+
+
+def _codex_unconfirmed_review_group(mission):
+    """Group unresolved missions for review without changing their classification."""
+    prompts = [str(turn.get('prompt') or '') for turn in (mission.get('turns') or [])]
+    text = _codex_plain_text(' '.join(prompts) or mission.get('title') or '')
+    categories = set(mission.get('categories') or [])
+
+    # A direct reference to the tracker is stronger than generic words such as
+    # "token", "Astra", or "Codex".  Those generic words also occur in model
+    # advice, runtime debugging, document conversion, and SU-30 work, so using
+    # them as standalone tracker signals makes the review queue misleading.
+    usage_tracker_phrases = (
+        'usage tracker', 'model breakdown', 'codex usage',
+        'bieu do xu huong tieu thu token', 'bieu do xu huong chi phi',
+        'ma tran tong token', 'ma tran hao phi han muc',
+        'thong ke token 7 ngay',
+    )
+    if any(phrase in text for phrase in usage_tracker_phrases):
+        topic_key, topic_label = 'usage_tracker', 'Usage Tracker / model / hạn mức'
+    else:
+        topic_key = None
+        topic_label = None
+
+    topic_rules = (
+        ('gbpusd', 'GBPUSD / giao dịch', (
+            'gbpusd', 'trading', 'trade', 'tp2', 'tp3', 'pullback',
+            'trailing', 'backtest', 'fxreplay', 'forex factory', 'nen m1',
+        )),
+        ('su30', 'SU-30 / tài liệu kỹ thuật', (
+            'su-30', 'su30', 'buong lai', 'thuy luc', 'dong co',
+            'may bay', 'tai lieu su30',
+        )),
+        ('personnel', 'Hồ sơ nhân sự / tài liệu', (
+            'dang vien', 'ho so', 'dong chi', 'li lich', 'cmnd',
+            'cap hoc', 'chinh tri vien',
+        )),
+        ('codex_runtime', 'Runtime / lỗi phần mềm Codex', (
+            'codex-chatgpt-web', 'bug minimize', 'prompt insertion',
+            'electron', 'diagnostic patch', 'source map', 'stream disconnected',
+            'context 80k', 'native2', 'auto review', 'config.toml',
+            'model picker', 'model provider', 'codex workflow',
+        )),
+        ('device_network', 'Máy tính / điện thoại / mạng', (
+            'xiaomi', 'sac nhanh', 'gpu', 'quat lam mat', 'den man hinh',
+            'vpn', 'nha mang', 'toc do mang', 'virus',
+        )),
+        ('product_model', 'Câu hỏi sản phẩm / model', (
+            'chatgpt plus', 'chatgpt go', 'codex free', 'thue bao',
+            'context window', '372k', 'gemini 3.5', 'model 5.5', 'model 5.4',
+            'gpt reverse', 'astra', '5.6 sol', 'luna', 'muse',
+        )),
+        ('usage_tracker', 'Usage Tracker / model / hạn mức', (
+            'han muc codex', 'quota codex', 'rate limit', 'khung 5 gio',
+            'han muc 5h', 'han muc tuan', 'reset han muc codex',
+        )),
+    )
+    if topic_key is None:
+        for candidate_key, candidate_label, phrases in topic_rules:
+            if any(phrase in text for phrase in phrases):
+                topic_key, topic_label = candidate_key, candidate_label
+                break
+    if topic_key is None:
+        fallback = (
+            ('documents', 'Tài liệu / bảng biểu khác'),
+            ('software_debugging', 'Chẩn đoán / phần mềm khác'),
+            ('system_diagnostics', 'Chẩn đoán / phần mềm khác'),
+            ('research', 'Nghiên cứu khác'),
+            ('web', 'Làm web khác'),
+        )
+        topic_key, topic_label = next(
+            ((key, label) for key, label in fallback if key in categories),
+            ('other', 'Khác / chưa đủ ngữ cảnh'),
+        )
+
+    first = _codex_plain_text(prompts[0] if prompts else mission.get('title') or '')
+    action_phrases = (
+        'sua ', 'lam ', 'kiem tra', 'tim ', 'tao ', 'cai ', 'chinh ',
+        'xuat ', 'doc ', 'thuc hien', 'toi uu', 'chay ', 'tiep tuc',
+        'cap nhat', 'dieu tra',
+    )
+    question_phrases = (
+        '?', 'toi muon hoi', 'toi hoi', 'tai sao', 'vi sao', 'co phai',
+        'duoc ko', 'duoc khong', 'nhu the nao', 'khac nhau', 'so voi', 'co the',
+    )
+    if re.match(r'^(?:ok[ ,]*|the |gio )?(?:ban )?(?:lam|tiep tuc|chay) ', first):
+        form_key, form_label = 'continuation', 'Lệnh tiếp tục thiếu tên việc'
+    elif any(phrase in text for phrase in question_phrases) and not any(
+            phrase in text for phrase in action_phrases):
+        form_key, form_label = 'question', 'Câu hỏi / tư vấn'
+    else:
+        form_key, form_label = 'action', 'Nhiệm vụ hành động / điều tra'
+    return {
+        'key': f'{topic_key}:{form_key}',
+        'topic_key': topic_key,
+        'topic_label': topic_label,
+        'form_key': form_key,
+        'form_label': form_label,
+        'label': f'{topic_label} · {form_label}',
+    }
+
+
+def _codex_collect_unconfirmed_groups(missions):
+    grouped = {}
+    for mission in missions or []:
+        if not str(mission.get('status') or '').startswith('unresolved'):
+            mission['unconfirmed_group_key'] = ''
+            continue
+        group = _codex_unconfirmed_review_group(mission)
+        mission['unconfirmed_group_key'] = group['key']
+        target = grouped.setdefault(group['key'], {
+            **group,
+            'mission_count': 0,
+            'anchor_turn_ids': [],
+            'samples': [],
+        })
+        target['mission_count'] += 1
+        target['anchor_turn_ids'].append(mission.get('anchor_turn_id'))
+        if len(target['samples']) < 4:
+            target['samples'].append({
+                'anchor_turn_id': mission.get('anchor_turn_id'),
+                'title': mission.get('title'),
+                'categories': list(mission.get('categories') or []),
+                'turn_count': mission.get('turn_count'),
+            })
+    return sorted(
+        grouped.values(),
+        key=lambda item: (-item['mission_count'], item['topic_label'], item['form_label']),
+    )
 
 
 def _codex_matrix_attributed_samples(missions):
@@ -6583,7 +7426,8 @@ def _codex_matrix_attributed_samples(missions):
                          cost_known=True, repair_penalty_tokens=0.0,
                          raw_quota_pct_5h=None, quota_known=False,
                          quota_source=None, repair_penalty_quota_pct_5h=None,
-                         category_split=False, repair_attributed=False):
+                         category_split=False, repair_attributed=False,
+                         status=None, accepted=None):
         if category not in CODEX_TASK_CATEGORY_KEYS or not model_key:
             return
         tokens = float(raw_tokens or 0.0)
@@ -6614,13 +7458,15 @@ def _codex_matrix_attributed_samples(missions):
             'correction_turns': root.get('correction_turns', 0),
             'added_guidance_tokens_est': root.get('added_guidance_tokens_est', 0),
             'first_pass_success': root.get('first_pass_success', False),
-            'status': root.get('status'),
-            'accepted': root.get('accepted', False),
+            'status': status if status is not None else root.get('status'),
+            'accepted': bool(accepted) if accepted is not None else root.get('accepted', False),
             # "Unconfirmed" and "needs review" are deliberately separate.
             # An unresolved mission is still a usable matrix sample, with
             # lower confidence, but it should only count as pending review
             # when the review classifier found a concrete reason.
-            'unconfirmed': not bool(root.get('accepted')),
+            'unconfirmed': not (
+                bool(accepted) if accepted is not None else bool(root.get('accepted'))
+            ),
             'pending_review': bool(
                 root.get('needs_review') or root.get('needs_category_review')
             ),
@@ -6645,10 +7491,15 @@ def _codex_matrix_attributed_samples(missions):
         sample['cost_known'] = bool(sample['cost_known']) and bool(cost_known)
         sample['category_split'] = bool(sample['category_split'] or category_split)
         sample['repair_attributed'] = bool(sample['repair_attributed'] or repair_attributed or penalty > 0)
+        if accepted:
+            sample['status'] = status or sample.get('status')
+            sample['accepted'] = True
+            sample['unconfirmed'] = False
         if sample['repair_attributed']:
             sample['first_pass_success'] = False
             sample['correction_turns'] = max(1, _safe_nonnegative_int(sample.get('correction_turns')))
 
+    accepted_repair_roots = {}
     for mission in usable:
         root = attribution_root(mission)
         base_categories = mission_categories(mission)
@@ -6719,6 +7570,8 @@ def _codex_matrix_attributed_samples(missions):
                         quota_source=model_usage.get('quota_source'),
                         category_split=len(categories) > 1,
                         repair_attributed=separate_repair,
+                        status=mission.get('status'),
+                        accepted=mission.get('accepted'),
                     )
                     contribution_count += 1
 
@@ -6759,7 +7612,33 @@ def _codex_matrix_attributed_samples(missions):
                         if model_quota_known else None,
                         category_split=len(base_categories) > 1,
                         repair_attributed=separate_repair,
+                        status=mission.get('status'),
+                        accepted=mission.get('accepted'),
                     )
+
+        # Acceptance belongs to the completed objective, not only to the model
+        # used by the final repair. Mark every model contribution under the
+        # same repair root as accepted once the terminal repair is accepted.
+        if separate_repair and mission.get('accepted'):
+            root_id = mission_identity(root)
+            accepted_repair_roots[root_id] = mission.get('status')
+            for sample_key, sample in attributed.items():
+                if sample_key[0] != root_id:
+                    continue
+                sample['status'] = mission.get('status')
+                sample['accepted'] = True
+                sample['unconfirmed'] = False
+
+    # Missions are not guaranteed to be ordered root-first. A repaired root
+    # can therefore add another model contribution after the accepted repair
+    # was processed; normalize every contribution after the first pass.
+    for sample_key, sample in attributed.items():
+        accepted_status = accepted_repair_roots.get(sample_key[0])
+        if accepted_status is None:
+            continue
+        sample['status'] = accepted_status
+        sample['accepted'] = True
+        sample['unconfirmed'] = False
 
     # A cross-model repair is real usage for the new model and an explicit
     # penalty for the model whose output had to be repaired.  Add that penalty
@@ -7232,6 +8111,10 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
 
     thread_turns = {}
     delegated_turns = []
+    reviewed_anchors = set(
+        str(anchor) for anchor in (reviews.get('missions') or {})
+        if str(anchor)
+    )
     for raw_turn in logical_turns:
         if not isinstance(raw_turn, dict) or not raw_turn.get('turn_id') or not raw_turn.get('user_text'):
             continue
@@ -7241,13 +8124,31 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
             'output_tokens': 0, 'thinking_tokens': 0, 'total_tokens': 0,
             'models': [], 'route': [], 'cost_known': False, 'cost_usd': 0.0, 'last_at': '',
         })
+        signal_flags = _codex_prompt_flags(turn.get('user_text') or '')
         if (not turn.get('completed') and
                 _safe_nonnegative_int(turn.get('assistant_message_count')) <= 0 and
-                _safe_nonnegative_int(turn['usage'].get('total_tokens')) <= 0):
+                _safe_nonnegative_int(turn['usage'].get('total_tokens')) <= 0 and
+                not signal_flags['acceptance_only'] and
+                not signal_flags['manual_user_repair']):
             continue
-        if turn.get('is_subagent'):
+        outer_turn_id = str(
+            turn.get('outer_turn_id') or turn.get('usage_task_id') or turn.get('turn_id') or ''
+        )
+        reviewed_orphan = bool(
+            turn.get('is_subagent') and
+            not str(turn.get('parent_thread_id') or '') and
+            (str(turn.get('turn_id') or '') in reviewed_anchors or
+             outer_turn_id in reviewed_anchors)
+        )
+        if turn.get('is_subagent') and not reviewed_orphan:
             delegated_turns.append(turn)
         else:
+            if reviewed_orphan:
+                # Some migrated/direct desktop tasks are labelled ``subagent``
+                # without a parent.  Do not promote all such orphan logs: a
+                # manual mission review is the explicit evidence that this is
+                # user-owned work which belongs in the outcome matrix.
+                turn['reviewed_orphan_promoted'] = True
             thread_turns.setdefault(str(turn.get('thread_id') or turn.get('source_file') or ''), []).append(turn)
 
     missions = []
@@ -7260,11 +8161,39 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
             nonlocal current
             if current is None:
                 return
+            if not default_status and current.get('status') == 'unresolved':
+                inferred = _codex_infer_terminal_status(current)
+                if inferred:
+                    default_status, confidence = inferred
             if default_status and current.get('status') == 'unresolved':
                 current['status'] = default_status
                 current['status_confidence'] = confidence or current.get('status_confidence') or 'low'
             if accepted_at:
                 current['accepted_at'] = accepted_at
+            first_current_turn = (current.get('turns') or [None])[0]
+            vague_continuation = bool(
+                isinstance(first_current_turn, dict) and
+                _codex_is_vague_continuation_prompt(first_current_turn.get('user_text') or '')
+            )
+            if (thread_missions and vague_continuation and
+                    (current.get('category') == 'other' or
+                     first_current_turn.get('category_from_assistant'))):
+                previous_mission = thread_missions[-1]
+                previous_categories = list(
+                    previous_mission.get('categories') or [previous_mission.get('category') or 'other']
+                )
+                if previous_categories and previous_categories[0] != 'other':
+                    current['category'] = previous_categories[0]
+                    current['categories'] = previous_categories
+                    current['category_confidence'] = 'medium'
+                    for inherited_turn in current.get('turns') or []:
+                        if (inherited_turn.get('category') == 'other' or
+                                inherited_turn.get('category_from_assistant') or
+                                _codex_is_vague_continuation_prompt(inherited_turn.get('user_text') or '')):
+                            inherited_turn['category'] = previous_categories[0]
+                            inherited_turn['categories'] = list(previous_categories)
+                            inherited_turn['category_confidence'] = 'medium'
+                            inherited_turn['category_inherited'] = True
             completed = _codex_finalize_mission(current, reviews)
             if completed:
                 completed['boundary_override'] = boundaries.get(completed['anchor_turn_id'])
@@ -7273,8 +8202,17 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
 
         for turn in turns:
             text = str(turn.get('user_text') or '')
+            if _codex_is_non_task_prompt(text):
+                continue
             flags = _codex_prompt_flags(text)
             boundary = boundaries.get(str(turn.get('turn_id') or ''))
+            if flags['manual_user_repair'] and current is not None and boundary != 'continue':
+                # A concrete "I fixed it myself by hand" statement is evidence
+                # that the model did not finish the preceding objective.  Do not
+                # let the later artifact silently convert that model run to success.
+                finish_current('failed_user_repaired_auto', 'high', turn.get('started_at'))
+                if not flags['new_work']:
+                    continue
             if flags['acceptance_only'] and boundary != 'new':
                 if current is not None:
                     finish_current('accepted_explicit', 'high', turn.get('started_at'))
@@ -7283,25 +8221,127 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
             categories, category, category_confidence, category_ambiguous = _codex_task_categories(
                 text, turn.get('cwd')
             )
+            category_from_assistant = False
+            if ((category == 'other' or category_confidence == 'low') and
+                    str(turn.get('assistant_text') or '').strip()):
+                assistant_categories, assistant_category, assistant_confidence, assistant_ambiguous = (
+                    _codex_task_categories(turn.get('assistant_text') or '', turn.get('cwd'))
+                )
+                if assistant_category != 'other' and assistant_confidence in ('medium', 'high'):
+                    categories = assistant_categories
+                    category = assistant_category
+                    category_confidence = 'medium'
+                    category_ambiguous = assistant_ambiguous
+                    category_from_assistant = True
+            if (current is not None and
+                    'web' in (current.get('categories') or []) and
+                    _codex_is_embedded_classification_example(text)):
+                categories = ['web']
+                category = 'web'
+                category_confidence = 'high'
+                category_ambiguous = False
             if flags['acceptance_plus_work'] and current is not None and boundary != 'continue':
                 finish_current('accepted_explicit', 'high', turn.get('started_at'))
 
             start_new = current is None
             inferred_boundary = False
+            inferred_boundary_reason = ''
+            repair_split = False
             if current is not None:
+                previous_turn = (current.get('turns') or [])[-1] if current.get('turns') else None
+                previous_model = _codex_turn_primary_model_hint(previous_turn)
+                current_model = _codex_turn_primary_model_hint(turn)
+                model_changed = bool(
+                    previous_model and current_model and previous_model != current_model
+                )
+                previous_has_response = bool(
+                    isinstance(previous_turn, dict) and
+                    (_safe_nonnegative_int((previous_turn.get('usage') or {}).get('total_tokens')) > 0 or
+                     _safe_nonnegative_int(previous_turn.get('assistant_message_count')) > 0)
+                )
+                current_has_response = bool(
+                    _safe_nonnegative_int(turn.get('assistant_message_count')) > 0
+                )
+                current_categories = set(current.get('categories') or [current.get('category') or 'other'])
+                repair_category_overlap = bool(
+                    set(categories) & current_categories or
+                    category == 'other' or category_confidence == 'low' or
+                    current.get('category') == 'other'
+                )
+                repair_request = bool(
+                    _codex_is_repair_prompt(text) and
+                    not _codex_is_quota_accounting_question(text)
+                )
+                cross_model_new_action = _codex_is_cross_model_new_action_transition(
+                    text,
+                    (previous_turn or {}).get('user_text') or '',
+                    model_changed,
+                )
+                previous_dt = _parse_iso_utc((previous_turn or {}).get('started_at'))
+                turn_dt = _parse_iso_utc(turn.get('started_at'))
+                gap_hours = (
+                    (turn_dt - previous_dt).total_seconds() / 3600.0
+                    if previous_dt is not None and turn_dt is not None else 0.0
+                )
                 if boundary == 'new':
                     start_new = True
+                    repair_split = (
+                        repair_request and model_changed and previous_has_response and current_has_response and
+                        repair_category_overlap
+                    )
                 elif boundary == 'continue':
-                    start_new = False
-                elif flags['followup']:
                     start_new = False
                 elif flags['acceptance_plus_work'] or flags['new_work']:
                     start_new = True
                     inferred_boundary = True
+                    inferred_boundary_reason = 'explicit_new_work'
+                elif cross_model_new_action:
+                    start_new = True
+                    inferred_boundary = True
+                    inferred_boundary_reason = 'cross_model_new_action'
+                elif (flags['informational_question'] and
+                      _codex_is_quota_accounting_question(text)):
+                    start_new = True
+                    inferred_boundary = True
+                    inferred_boundary_reason = 'quota_accounting_question'
+                elif (repair_request and model_changed and previous_has_response and current_has_response and
+                      repair_category_overlap):
+                    # A correction performed by another model must be its own
+                    # mission so the repair model keeps its real usage and the
+                    # failed model receives the same amount as a penalty.
+                    start_new = True
+                    inferred_boundary = True
+                    inferred_boundary_reason = 'cross_model_repair'
+                    repair_split = True
+                elif flags['followup']:
+                    if (gap_hours >= 6.0 and
+                            not _codex_is_explicit_continuation_prompt(text)):
+                        start_new = True
+                        inferred_boundary = True
+                        inferred_boundary_reason = 'long_gap_followup'
+                    else:
+                        start_new = False
+                elif current.get('turns'):
+                    if gap_hours >= 6.0:
+                        # A later same-category request is normally a new unit
+                        # of work. Explicit continuation/correction wording was
+                        # handled above, so delayed repairs remain connected.
+                        start_new = True
+                        inferred_boundary = True
+                        inferred_boundary_reason = 'long_gap'
+                    elif (category != current.get('category') and
+                          category_confidence == 'high' and
+                          current.get('category_confidence') == 'high'):
+                        start_new = True
+                        inferred_boundary = True
+                        inferred_boundary_reason = 'category_change'
+                    else:
+                        start_new = False
                 elif (category != current.get('category') and category_confidence == 'high' and
                       current.get('category_confidence') == 'high'):
                     start_new = True
                     inferred_boundary = True
+                    inferred_boundary_reason = 'category_change'
                 else:
                     start_new = False
 
@@ -7333,10 +8373,13 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
             turn['category_confidence'] = category_confidence
             turn['category_ambiguous'] = category_ambiguous
             turn['category_inherited'] = category_inherited
+            turn['category_from_assistant'] = category_from_assistant
 
             if start_new:
                 if current is not None:
-                    if inferred_boundary:
+                    if repair_split:
+                        finish_current('abandoned_auto_repaired', 'high', turn.get('started_at'))
+                    elif inferred_boundary:
                         finish_current('accepted_inferred', 'medium', turn.get('started_at'))
                     else:
                         finish_current()
@@ -7345,6 +8388,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
                     'category_confidence': category_confidence,
                     'status': 'unresolved', 'status_confidence': 'low',
                     'accepted_at': '',
+                    'inferred_boundary_reason': inferred_boundary_reason,
                 }
             elif (category_confidence == 'high' and
                   (current.get('category_confidence') != 'high' or
@@ -7394,6 +8438,8 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         quota_task_samples=quota_task_samples,
     )
     review_cases = _codex_collect_review_cases(missions)
+    audit_cases, audit_groups, audit_patterns = _codex_collect_audit_cases(missions)
+    unconfirmed_groups = _codex_collect_unconfirmed_groups(missions)
     repair_accounting = _codex_repair_accounting_summary(missions)
     matrices = {
         '90': _codex_task_matrix(missions, 90, now_utc),
@@ -7402,6 +8448,17 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         'all': _codex_task_matrix(missions, None, now_utc),
     }
     accepted_count = sum(1 for mission in missions if mission.get('accepted'))
+    abandoned_count = sum(
+        1 for mission in missions
+        if (str(mission.get('status') or '').startswith('abandoned') or
+            str(mission.get('status') or '').startswith('failed_user_repaired'))
+    )
+    excluded_count = sum(
+        1 for mission in missions if str(mission.get('status') or '').startswith('excluded')
+    )
+    unresolved_count = sum(
+        1 for mission in missions if str(mission.get('status') or '').startswith('unresolved')
+    )
     mixed_count = sum(1 for mission in missions if len(set(mission.get('route') or [])) > 1)
     reviewed_count = sum(1 for mission in missions if mission.get('reviewed'))
     category_counts = {}
@@ -7415,16 +8472,26 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         'categories': list(CODEX_TASK_CATEGORIES),
         'missions': missions,
         'review_cases': review_cases,
+        'audit_cases': audit_cases,
+        'audit_groups': audit_groups,
+        'audit_patterns': audit_patterns,
+        'unconfirmed_groups': unconfirmed_groups,
         'repair_accounting': repair_accounting,
         'matrices': matrices,
         'summary': {
             'mission_count': len(missions),
             'accepted_count': accepted_count,
-            'unresolved_count': len(missions) - accepted_count - sum(1 for mission in missions if mission.get('status').startswith('abandoned')),
-            'abandoned_count': sum(1 for mission in missions if mission.get('status').startswith('abandoned')),
+            'unresolved_count': unresolved_count,
+            'abandoned_count': abandoned_count,
+            'excluded_count': excluded_count,
+            'unconfirmed_group_count': len(unconfirmed_groups),
             'mixed_model_count': mixed_count,
             'reviewed_count': reviewed_count,
             'review_case_count': len(review_cases),
+            'audit_case_count': len(audit_cases),
+            'audit_group_count': len(audit_groups),
+            'soft_audit_case_count': sum(1 for item in audit_cases if item.get('soft_audit_needed')),
+            'audit_pattern_count': len(audit_patterns),
             'repair_penalty_tokens': repair_accounting['repair_penalty_tokens'],
             'effective_tokens': repair_accounting['effective_tokens'],
             'category_counts': category_counts,

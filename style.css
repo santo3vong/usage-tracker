@@ -349,6 +349,10 @@
     color: #fde68a;
 }
 
+.task-audit-warning {
+    color: #bfdbfe;
+}
+
 .task-repair-penalty {
     color: #fda4af;
 }
@@ -366,6 +370,8 @@
 .task-status-pill.accepted { color: #6ee7b7; background: rgba(16, 185, 129, 0.12); }
 .task-status-pill.unresolved { color: #fde68a; background: rgba(245, 158, 11, 0.12); }
 .task-status-pill.abandoned { color: #fda4af; background: rgba(244, 63, 94, 0.12); }
+.task-status-pill.user_repaired { color: #fdba74; background: rgba(249, 115, 22, 0.14); }
+.task-status-pill.excluded { color: #cbd5e1; background: rgba(100, 116, 139, 0.16); }
 .task-confidence-pill.high { color: #6ee7b7; background: rgba(16, 185, 129, 0.1); }
 .task-confidence-pill.medium { color: #fde68a; background: rgba(245, 158, 11, 0.1); }
 .task-confidence-pill.low { color: #cbd5e1; background: rgba(100, 116, 139, 0.16); }
@@ -2572,13 +2578,104 @@ body {
    COLUMN RESIZER HANDLES (Drag to resize columns)
    ========================================================================== */
 
+.table-size-controls {
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 0 8px auto;
+    color: var(--text-muted);
+    font-size: 0.74rem;
+}
+
+.table-size-controls summary {
+    width: fit-content;
+    margin-left: auto;
+    padding: 5px 9px;
+    border: 1px solid var(--border-glass);
+    border-radius: 7px;
+    background: rgba(15, 23, 42, 0.72);
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    font-weight: 700;
+}
+
+.table-size-controls[open] summary {
+    border-color: rgba(34, 211, 238, 0.38);
+    color: var(--cyan-400);
+}
+
+.table-size-control-panel {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding: 9px 10px;
+    border: 1px solid var(--border-glass);
+    border-radius: 9px;
+    background: rgba(15, 23, 42, 0.92);
+    box-shadow: 0 10px 25px rgba(2, 6, 23, 0.2);
+}
+
+.table-size-control-panel label {
+    display: grid;
+    grid-template-columns: auto minmax(90px, 150px) 58px;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+}
+
+.table-size-control-panel input[type="range"] {
+    width: 100%;
+    accent-color: var(--cyan-400);
+}
+
+.table-size-control-panel output {
+    color: var(--text-secondary);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.table-size-control-panel button {
+    padding: 5px 8px;
+    border: 1px solid var(--border-glass);
+    border-radius: 6px;
+    background: rgba(30, 41, 59, 0.82);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+}
+
+.table-size-control-panel button:hover {
+    border-color: rgba(34, 211, 238, 0.38);
+    color: var(--cyan-400);
+}
+
+.table-resizable-viewport {
+    min-width: min(300px, 100%);
+    overflow: auto;
+}
+
+.has-table-col-resizer {
+    position: relative;
+}
+
+body.is-resizing-table-column,
+body.is-resizing-table-column * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+
 .table-col-resizer {
     position: absolute;
     top: 0;
     right: 0;
-    width: 5px;
+    width: 9px;
     cursor: col-resize;
     user-select: none;
+    touch-action: none;
     height: 100%;
     background: transparent;
     transition: background 0.15s;
@@ -2730,8 +2827,23 @@ body {
 .table-col-resizer:hover,
 .table-col-resizer.resizing {
     background: var(--cyan-400);
-    width: 3px;
+    width: 4px;
     box-shadow: 0 0 6px var(--cyan-400);
+}
+
+@media (max-width: 720px) {
+    .table-size-controls {
+        width: 100%;
+    }
+
+    .table-size-control-panel {
+        justify-content: stretch;
+    }
+
+    .table-size-control-panel label {
+        grid-template-columns: 42px minmax(90px, 1fr) 58px;
+        width: 100%;
+    }
 }
 
 /* Sortable Headers */
