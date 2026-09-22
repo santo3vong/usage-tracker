@@ -4,12 +4,16 @@ All notable public changes to Usage Tracker will be documented here.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-22
+
 ### Added
 
 - Resizable table viewports and persistent per-column widths across the dashboard.
 - Grouped review filters for unresolved missions and soft-audit signals.
 - Repair-chain accounting that keeps the repair model's own usage while charging the same quota cost as a penalty to the model whose result required the repair.
 - Historical mission-boundary reasons and automatic separation of cross-model repairs, quota-accounting questions, and new actions after a model handoff.
+- A complete catalog of the 27 currently selectable Codex model/effort combinations, while retaining locally observed models that are no longer in the picker.
+- Empirical cross-model repair evidence with accepted successes, attempts, task categories, median 5-hour quota consumption, and confidence labels.
 
 ### Changed
 
@@ -19,6 +23,8 @@ All notable public changes to Usage Tracker will be documented here.
 - Mission comparisons prioritize measured 5-hour quota consumption; raw-token ratios remain supporting evidence with provenance and confidence labels.
 - UI selections, chart ranges, language, table sizes, and column widths persist locally between launches.
 - The public checkout uses port `5051`, with safer start/stop handling for stale PID files and unrelated port owners.
+- Refreshed the Artificial Analysis benchmark snapshot to Index v4.3.2 (2026-09-21), with unbenchmarked selectable configurations shown explicitly instead of omitted.
+- Kept Model Breakdown as observed per-model token and cost accounting; repair penalties remain isolated to task-outcome efficiency so actual spend is not double-counted.
 
 ### Fixed
 
@@ -27,6 +33,7 @@ All notable public changes to Usage Tracker will be documented here.
 - Classified questions about model ratios, quota penalties, and sudden efficiency changes as research instead of inheriting the Usage Tracker web-project label.
 - Prevented phrases such as “do not use old data,” “CPU is not fully used,” or “not pushed to GitHub yet” from creating false repair links.
 - Restored complete Vietnamese/English translation of dynamically rendered task-outcome controls and status labels.
+- Restored complete Vietnamese/English translation of the model leaderboard and repair-evidence table.
 
 ## [0.2.1] - 2026-09-16
 

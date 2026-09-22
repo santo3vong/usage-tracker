@@ -909,12 +909,12 @@
             <!-- Leaderboard Header Banner -->
             <section class="leaderboard-hero">
                 <div class="hero-tag">
-                    <span>⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v4.3 • CẬP NHẬT 09/09/2026</span>
+                    <span>⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v4.3.2 • CẬP NHẬT 21/09/2026</span>
                 </div>
                 <h2>Bảng Xếp Hạng Models — Chọn Model Theo Việc Cần Làm</h2>
                 <p>
-                    Điểm trí tuệ, tốc độ và chi phí/task lấy từ <strong>Artificial Analysis v4.3</strong>; nhãn “ước tính” được giữ nguyên khi AA chưa hoàn tất đo độc lập.
-                    Mỗi dòng còn ghép với <strong>token, chi phí all-time và quota/task đo từ log cục bộ</strong> để hỗ trợ quyết định thực tế.
+                    Điểm trí tuệ, tốc độ và chi phí/task lấy từ <strong>Artificial Analysis v4.3.2</strong>; nhãn “ước tính” được giữ nguyên khi AA chưa hoàn tất đo độc lập.
+                    Bảng vẫn hiển thị model có thể chọn trong Codex hoặc đã dùng cục bộ khi AA chưa công bố điểm, đồng thời ghép <strong>token, chi phí all-time và quota/task từ log cục bộ</strong>.
                 </p>
             </section>
 
@@ -930,14 +930,14 @@
                 <div class="section-header">
                     <h2 class="section-title">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
-                        So Sánh Intelligence Index v4.3 Và Tốc Độ Output
+                        So Sánh Intelligence Index v4.3.2 Và Tốc Độ Output
                     </h2>
                 </div>
 
                 <div class="charts-row">
                     <div class="chart-card">
                         <div class="chart-header">
-                            <h3>Intelligence Index v4.3</h3>
+                            <h3>Intelligence Index v4.3.2</h3>
                             <span class="chart-badge">Higher is better</span>
                         </div>
                         <canvas id="leaderboard-iq-chart"></canvas>
@@ -960,16 +960,17 @@
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 17c0 .55-.45 1-1 1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M6 2h12v7a6 6 0 0 1-12 0V2Z"></path></svg>
                             Bảng Quyết Định Model
                         </h2>
-                        <p class="section-desc">Mặc định chỉ hiện sáu lựa chọn có ích nhất. Mở “Tất cả AA v4.3” để xem các biến thể hiện tại và lịch sử.</p>
+                        <p class="section-desc">Mặc định hiện đầy đủ các model và mức reasoning đang có trong bộ chọn Codex. Dòng chưa được Artificial Analysis chấm vẫn xuất hiện nhưng không có hạng.</p>
                     </div>
 
                     <div class="table-actions leaderboard-controls">
                         <span id="leaderboard-result-count" class="leaderboard-result-count">0 biến thể</span>
                         <select id="leaderboard-scope-select" class="select-styled" aria-label="Phạm vi model">
+                            <option value="selectable">Phạm vi: Có thể chọn trong Codex</option>
                             <option value="recommended">Phạm vi: Khuyến nghị</option>
                             <option value="current">Phạm vi: Thế hệ hiện tại</option>
                             <option value="local">Phạm vi: Đã dùng cục bộ</option>
-                            <option value="all">Phạm vi: Tất cả AA v4.3</option>
+                            <option value="all">Phạm vi: Tất cả model</option>
                         </select>
                         <select id="leaderboard-family-select" class="select-styled" aria-label="Họ model">
                             <option value="all">Họ model: Tất cả</option>
@@ -1001,7 +1002,7 @@
                             <tr>
                                 <th>Hạng AA</th>
                                 <th>Model, nguồn & trạng thái</th>
-                                <th class="num">Intelligence v4.3</th>
+                                <th class="num">Intelligence v4.3.2</th>
                                 <th class="num">Tốc độ</th>
                                 <th class="num">AA cost/task & IQ/$</th>
                                 <th class="num">API $/1M In · Cache · Out</th>
@@ -1012,6 +1013,33 @@
                         </thead>
                         <tbody id="leaderboard-tbody">
                             <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="section-header">
+                    <div>
+                        <h2 class="section-title">Bằng Chứng Model Sửa Thành Công Cho Model Khác</h2>
+                        <p class="section-desc">Chỉ tính chuỗi sửa khác model đã đạt yêu cầu. Điểm Intelligence của Artificial Analysis là tín hiệu năng lực bổ trợ; kết quả sửa thực tế và hạn mức tiêu hao vẫn là bằng chứng chính.</p>
+                    </div>
+                    <span id="leaderboard-rescue-count" class="leaderboard-result-count">0 cặp đã quan sát</span>
+                </div>
+                <div class="table-container">
+                    <table class="conv-table" id="leaderboard-rescue-table">
+                        <thead>
+                            <tr>
+                                <th>Model cần được sửa</th>
+                                <th>Model sửa thành công</th>
+                                <th>Loại nhiệm vụ</th>
+                                <th class="num">Thành công / lượt thử</th>
+                                <th class="num">Hạn mức sửa trung vị</th>
+                                <th>Bằng chứng năng lực</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-rescue-tbody">
+                            <tr><td colspan="6" class="leaderboard-empty">Chưa có chuỗi sửa khác model đã đạt yêu cầu.</td></tr>
                         </tbody>
                     </table>
                 </div>

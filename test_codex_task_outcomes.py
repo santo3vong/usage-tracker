@@ -47,6 +47,43 @@ def usage(turn_id, model, total, at):
 
 
 class CodexTaskOutcomeTests(unittest.TestCase):
+    def test_repair_capabilities_use_only_accepted_terminal_repairs_as_success(self):
+        missions = [
+            {
+                'id': 'root', 'model_key': '5.6 sol high', 'repair_of_mission_id': None,
+                'accepted': False, 'categories': ['web_development'],
+            },
+            {
+                'id': 'middle', 'model_key': '5.6 sol xhigh', 'repair_of_mission_id': 'root',
+                'accepted': False, 'categories': ['web_development'],
+                'repair_link_confidence': 'high',
+            },
+            {
+                'id': 'final', 'model_key': 'gpt-6-astra low', 'repair_of_mission_id': 'middle',
+                'accepted': True, 'categories': ['web_development'],
+                'repair_penalty_categories': ['web_development'],
+                'repair_link_confidence': 'manual', 'quota_pct_5h': 12.5,
+            },
+        ]
+
+        result = server._codex_build_repair_capabilities(missions)
+        pairs = {(row['from_model'], row['to_model']): row for row in result['pairs']}
+
+        failed_middle = pairs[('5.6 sol high', '5.6 sol xhigh')]
+        self.assertEqual(failed_middle['attempts'], 1)
+        self.assertEqual(failed_middle['accepted_repairs'], 0)
+
+        final_from_root = pairs[('5.6 sol high', 'gpt-6-astra low')]
+        self.assertEqual(final_from_root['accepted_repairs'], 1)
+        self.assertEqual(final_from_root['median_repair_quota_pct_5h'], 12.5)
+        self.assertEqual(final_from_root['categories'], ['web_development'])
+        self.assertEqual(final_from_root['intelligence_delta'], 4.0)
+        self.assertEqual(final_from_root['capability_prior'], 'higher')
+
+        final_from_middle = pairs[('5.6 sol xhigh', 'gpt-6-astra low')]
+        self.assertEqual(final_from_middle['accepted_repairs'], 1)
+        self.assertEqual(result['accepted_pair_count'], 2)
+
     def test_tool_output_failure_parser_uses_explicit_result_evidence(self):
         self.assertFalse(server._codex_tool_output_failed('Process exited with code 0'))
         self.assertTrue(server._codex_tool_output_failed('Process exited with code 1'))

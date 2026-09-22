@@ -18,4 +18,5 @@ runtime_backups/
 .codex_*
 _qa_*
 _run_505*.py
+runtime-*.log
 *.before-worker-calibration-*.json

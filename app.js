@@ -1701,6 +1701,12 @@ function setupTabs() {
 
 // ---- Leaderboard Rendering Engine ----
 let enrichedLeaderboardRows = [];
+let leaderboardRepairCapabilities = { pairs: [] };
+
+function leaderboardText(value) {
+    const text = String(value ?? '');
+    return window.UsageI18n?.t ? window.UsageI18n.t(text) : text;
+}
 
 function normalizeLeaderboardKey(value) {
     return String(value || '')
@@ -1719,6 +1725,12 @@ function enrichLeaderboardData(leaderboard, breakdown, codexUsage) {
     });
 
     const automatic = codexUsage?.automatic_model_usage || {};
+    const automaticModelRows = Array.isArray(automatic.models)
+        ? automatic.models
+        : Object.entries(automatic.models || {}).map(([modelName, row]) => ({ model_name: modelName, ...(row || {}) }));
+    const automaticUsageByKey = new Map(
+        automaticModelRows.map(row => [normalizeLeaderboardKey(row.model_name || row.model_key || row.model_id), row])
+    );
     const efficiencyByKey = new Map(
         (automatic.quota_efficiency?.models || []).map(row => [normalizeLeaderboardKey(row.model_key), row])
     );
@@ -1729,15 +1741,24 @@ function enrichLeaderboardData(leaderboard, breakdown, codexUsage) {
     return (leaderboard || []).map(item => {
         const key = normalizeLeaderboardKey(item.model_name);
         const local = usageByKey.get(key);
+        const automaticLocal = automaticUsageByKey.get(key);
         const efficiency = efficiencyByKey.get(key);
         const taskQuota = taskQuotaByKey.get(key);
+        const legacyTokens = Number(local?.total_tokens ?? item.local_total_tokens ?? 0);
+        const automaticTokens = Number(automaticLocal?.total_tokens ?? 0);
+        const legacyCost = Number(local?.total_cost_usd ?? item.local_cost_usd ?? 0);
+        const automaticCost = Number(automaticLocal?.cost_usd ?? 0);
+        const legacySessions = Number(local?.sessions ?? item.local_sessions ?? 0);
+        const automaticSessions = Number(automaticLocal?.sessions ?? 0);
+        const legacyResponses = Number(local?.responses ?? item.local_responses ?? 0);
+        const automaticResponses = Number(automaticLocal?.responses ?? 0);
         return {
             ...item,
-            local_total_tokens: Number(local?.total_tokens ?? item.local_total_tokens ?? 0),
-            local_cost_usd: Number(local?.total_cost_usd ?? item.local_cost_usd ?? 0),
-            local_cost_known: local ? local.cost_known !== false : true,
-            local_sessions: Number(local?.sessions ?? item.local_sessions ?? 0),
-            local_responses: Number(local?.responses ?? item.local_responses ?? 0),
+            local_total_tokens: legacyTokens + automaticTokens,
+            local_cost_usd: legacyCost + automaticCost,
+            local_cost_known: (local ? local.cost_known !== false : true) && (automaticLocal ? automaticLocal.cost_known !== false : true),
+            local_sessions: legacySessions + automaticSessions,
+            local_responses: legacyResponses + automaticResponses,
             local_quota_pct_per_1m_tokens: efficiency?.quota_pct_per_1m_tokens ?? null,
             local_relative_quota_burn: efficiency?.relative_quota_burn_vs_sol_high ?? null,
             local_quota_sample_count: efficiency?.sample_count ?? 0,
@@ -1752,8 +1773,10 @@ function enrichLeaderboardData(leaderboard, breakdown, codexUsage) {
 
 function renderLeaderboard(leaderboard, breakdown = [], codexUsage = {}) {
     enrichedLeaderboardRows = enrichLeaderboardData(leaderboard, breakdown, codexUsage);
+    leaderboardRepairCapabilities = codexUsage?.automatic_model_usage?.task_outcomes?.repair_capabilities || { pairs: [] };
     if (enrichedLeaderboardRows.length === 0) return;
     renderLeaderboardViews();
+    renderLeaderboardRepairCapabilities();
     renderModelCards(enrichedLeaderboardRows);
 }
 
@@ -1786,10 +1809,11 @@ function compareMetricAsc(field) {
 }
 
 function getFilteredLeaderboardRows() {
-    const scope = document.getElementById('leaderboard-scope-select')?.value || 'recommended';
+    const scope = document.getElementById('leaderboard-scope-select')?.value || 'selectable';
     const family = document.getElementById('leaderboard-family-select')?.value || 'all';
     return enrichedLeaderboardRows.filter(item => {
         const inScope = scope === 'all'
+            || (scope === 'selectable' && item.selectable_in_codex)
             || (scope === 'recommended' && item.recommended)
             || (scope === 'local' && Number(item.local_total_tokens || 0) > 0)
             || (scope === 'current' && item.generation_status !== 'previous');
@@ -1803,7 +1827,7 @@ function renderLeaderboardViews() {
     renderLeaderboardCharts(filtered);
     renderLeaderboardTable(filtered);
     const count = document.getElementById('leaderboard-result-count');
-    if (count) count.textContent = `${filtered.length}/${enrichedLeaderboardRows.length} biến thể`;
+    if (count) count.textContent = leaderboardText(`${filtered.length}/${enrichedLeaderboardRows.length} biến thể`);
 }
 
 function renderLeaderboardHighlights(leaderboard) {
@@ -1819,26 +1843,26 @@ function renderLeaderboardHighlights(leaderboard) {
         {
             cls: 'purple', cardCls: 'c-purple', icon: '🧠',
             val: topIQ ? `${topIQ.intelligence_index} IQ` : 'N/A',
-            label: '#1 Intelligence Index v4.3',
-            sub: topIQ ? `${topIQ.model_name} • ${topIQ.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập'}` : 'Không có model trong bộ lọc'
+            label: '#1 Intelligence Index v4.3.2',
+            sub: topIQ ? `${topIQ.display_name || topIQ.model_name} • ${leaderboardText(topIQ.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập')}` : leaderboardText('Không có model trong bộ lọc')
         },
         {
             cls: 'cyan', cardCls: 'c-cyan', icon: '⚡',
             val: topSpeed ? `${topSpeed.speed_tps} t/s` : 'N/A',
-            label: '#1 Tốc Độ Sinh Token',
-            sub: topSpeed ? `${topSpeed.model_name} • output tokens/giây` : 'Không có model trong bộ lọc'
+            label: `#1 ${leaderboardText('Tốc Độ Sinh Token')}`,
+            sub: topSpeed ? `${topSpeed.display_name || topSpeed.model_name} • ${leaderboardText('output tokens/giây')}` : leaderboardText('Không có model trong bộ lọc')
         },
         {
             cls: 'emerald', cardCls: 'c-emerald', icon: '💎',
             val: topValue ? `${topValue.value_score} IQ/$` : 'N/A',
-            label: '#1 Giá Trị Theo AA Task',
-            sub: topValue ? `${topValue.model_name} • $${topValue.cost_per_task}/task` : 'AA chưa công bố đủ cost/task'
+            label: `#1 ${leaderboardText('Giá Trị Theo AA Task')}`,
+            sub: topValue ? `${topValue.display_name || topValue.model_name} • $${topValue.cost_per_task}/task` : leaderboardText('AA chưa công bố đủ cost/task')
         },
         {
             cls: 'indigo', cardCls: 'c-indigo', icon: '📊',
             val: topUsage ? formatNumber(topUsage.local_total_tokens) : 'N/A',
-            label: '#1 Dùng Nhiều Nhất Cục Bộ',
-            sub: topUsage ? `${topUsage.model_name} • ${topUsage.local_sessions} phiên` : 'Chưa có usage trong bộ lọc'
+            label: `#1 ${leaderboardText('Dùng Nhiều Nhất Cục Bộ')}`,
+            sub: topUsage ? `${topUsage.display_name || topUsage.model_name} • ${leaderboardText(`${topUsage.local_sessions} phiên`)}` : leaderboardText('Chưa có usage trong bộ lọc')
         }
     ];
 
@@ -1859,14 +1883,14 @@ function renderLeaderboardCharts(leaderboard) {
             .filter(m => hasLeaderboardMetric(m.intelligence_index))
             .sort(compareMetricDesc('intelligence_index'))
             .slice(0, 14)
-            .map(m => ({ label: m.model_name.replace('Gemini ', 'G-'), value: m.intelligence_index }));
+            .map(m => ({ label: (m.display_name || m.model_name).replace('Gemini ', 'G-'), value: m.intelligence_index }));
         CanvasCharts.drawHorizontalBars(iqCanvas, iqData);
     }
 
     const speedCanvas = document.getElementById('leaderboard-speed-chart');
     if (speedCanvas) {
         const speedData = leaderboard.filter(m => hasLeaderboardMetric(m.speed_tps)).map(m => ({
-            label: m.model_name.replace('Gemini ', 'G-'),
+            label: (m.display_name || m.model_name).replace('Gemini ', 'G-'),
             value: m.speed_tps
         })).sort((a, b) => b.value - a.value).slice(0, 14);
         CanvasCharts.drawHorizontalBars(speedCanvas, speedData);
@@ -1876,7 +1900,8 @@ function renderLeaderboardCharts(leaderboard) {
 function formatLeaderboardPrice(item) {
     if (!hasLeaderboardMetric(item.price_in_1m) || !hasLeaderboardMetric(item.price_out_1m)) return '—';
     const cached = hasLeaderboardMetric(item.price_cached_in_1m) ? `$${item.price_cached_in_1m}` : '—';
-    return `<strong>$${item.price_in_1m}</strong><div class="leaderboard-cell-sub">cache ${cached} • out $${item.price_out_1m}</div>`;
+    const estimate = item.pricing_estimated ? ` • ${leaderboardText('ước tính')}` : '';
+    return `<strong>$${item.price_in_1m}</strong><div class="leaderboard-cell-sub">cache ${cached} • out $${item.price_out_1m}${estimate}</div>`;
 }
 
 function formatLocalQuota(item) {
@@ -1889,9 +1914,9 @@ function formatLocalQuota(item) {
     }
     if (Number.isFinite(perMillion) && perMillion > 0) {
         return `<strong>${perMillion.toFixed(2)}% / 1M raw</strong>
-            <div class="leaderboard-cell-sub">${item.local_quota_sample_count} khoảng đo • ${escapeHtml(item.local_quota_confidence || '')}</div>`;
+            <div class="leaderboard-cell-sub">${escapeHtml(leaderboardText(`${item.local_quota_sample_count} khoảng đo • ${item.local_quota_confidence || ''}`))}</div>`;
     }
-    return '<span class="leaderboard-na">Chưa đủ mẫu</span>';
+    return `<span class="leaderboard-na">${escapeHtml(leaderboardText('Chưa đủ mẫu'))}</span>`;
 }
 
 function renderLeaderboardTable(leaderboard) {
@@ -1904,7 +1929,9 @@ function renderLeaderboardTable(leaderboard) {
     if (sortType === 'recommendation') list.sort((a, b) => {
         const aOrder = a.recommendation_order == null ? 999 : Number(a.recommendation_order);
         const bOrder = b.recommendation_order == null ? 999 : Number(b.recommendation_order);
-        return aOrder - bOrder || (a.rank || 999) - (b.rank || 999);
+        const aSelection = a.selection_order == null ? 999 : Number(a.selection_order);
+        const bSelection = b.selection_order == null ? 999 : Number(b.selection_order);
+        return aOrder - bOrder || aSelection - bSelection || (a.rank || 999) - (b.rank || 999);
     });
     else if (sortType === 'iq-desc') list.sort(compareMetricDesc('intelligence_index'));
     else if (sortType === 'speed-desc') list.sort(compareMetricDesc('speed_tps'));
@@ -1923,27 +1950,35 @@ function renderLeaderboardTable(leaderboard) {
         if (item.rank === 1) rankClass = 'rank-1';
         else if (item.rank === 2) rankClass = 'rank-2';
         else if (item.rank === 3) rankClass = 'rank-3';
-        const rankLabel = item.rank ? `#${item.rank}` : 'N/A';
+        const rankLabel = item.rank ? `#${item.rank}` : '—';
         const provClass = item.provider.toLowerCase().includes('openai') ? 'provider-openai' : 'provider-google';
-        const statusText = item.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập';
-        const statusClass = item.benchmark_status === 'estimate' ? 'aa-estimate' : 'aa-measured';
-        const priorBadge = item.generation_status === 'previous' ? '<span class="aa-status aa-previous">đời trước</span>' : '';
+        const statusText = leaderboardText(item.benchmark_status === 'estimate'
+            ? 'AA ước tính'
+            : (item.benchmark_status === 'measured' ? 'AA đo độc lập' : 'AA chưa công bố'));
+        const statusClass = item.benchmark_status === 'estimate'
+            ? 'aa-estimate'
+            : (item.benchmark_status === 'measured' ? 'aa-measured' : 'aa-unavailable');
+        const selectableBadge = item.selectable_in_codex ? `<span class="aa-status aa-selectable">${escapeHtml(leaderboardText('có thể chọn'))}</span>` : '';
+        const priorBadge = item.generation_status === 'previous' ? `<span class="aa-status aa-previous">${escapeHtml(leaderboardText('đời trước'))}</span>` : '';
         const sourceLine = item.benchmark_source_url
-            ? `<a class="leaderboard-source-link" href="${escapeHtml(item.benchmark_source_url)}" target="_blank" rel="noopener">AA v${escapeHtml(item.benchmark_index_version || '4.3')} • ${escapeHtml(item.benchmark_as_of || '')}</a>`
-            : `AA v${escapeHtml(item.benchmark_index_version || '4.3')}`;
+            ? `<a class="leaderboard-source-link" href="${escapeHtml(item.benchmark_source_url)}" target="_blank" rel="noopener">AA v${escapeHtml(item.benchmark_index_version || '4.3.2')} • ${escapeHtml(item.benchmark_as_of || '')}</a>`
+            : (item.metadata_source_url
+                ? `<a class="leaderboard-source-link" href="${escapeHtml(item.metadata_source_url)}" target="_blank" rel="noopener">${escapeHtml(item.metadata_source || leaderboardText('Nguồn nhà cung cấp'))}</a> • ${escapeHtml(leaderboardText('AA chưa chấm'))}`
+                : escapeHtml(leaderboardText('AA chưa có dữ liệu cho model này')));
         const costTask = hasLeaderboardMetric(item.cost_per_task)
             ? `<strong>$${Number(item.cost_per_task).toFixed(2)}</strong><div class="leaderboard-cell-sub">${leaderboardMetric(item.value_score)} IQ/$</div>`
-            : '<span class="leaderboard-na">AA chưa công bố</span>';
-        const localCost = item.local_cost_known === false ? 'chưa định giá đủ' : `$${Number(item.local_cost_usd || 0).toFixed(2)}`;
-        const decisionLabel = item.decision_label || (item.generation_status === 'previous' ? 'Dữ liệu lịch sử' : item.badge);
-        const decisionNote = item.decision_note || item.best_for || '';
+            : `<span class="leaderboard-na">${escapeHtml(leaderboardText('AA chưa công bố'))}</span>`;
+        const localCost = item.local_cost_known === false ? leaderboardText('chưa định giá đủ') : `$${Number(item.local_cost_usd || 0).toFixed(2)}`;
+        const decisionLabel = leaderboardText(item.decision_label || (item.selectable_in_codex ? 'Có thể chọn trong Codex' : (item.generation_status === 'previous' ? 'Dữ liệu lịch sử' : item.badge)));
+        const decisionNote = leaderboardText(item.decision_note || item.best_for || '');
+        const localSessions = leaderboardText(`${item.local_sessions} phiên`);
 
         return `
             <tr>
                 <td><span class="rank-badge ${rankClass}">${rankLabel}</span></td>
                 <td>
-                    <div class="leaderboard-model-name">${escapeHtml(item.model_name)} <span class="provider-badge ${provClass}">${escapeHtml(item.provider)}</span></div>
-                    <div class="leaderboard-status-row"><span class="aa-status ${statusClass}">${statusText}</span>${priorBadge}</div>
+                    <div class="leaderboard-model-name">${escapeHtml(item.display_name || item.model_name)} <span class="provider-badge ${provClass}">${escapeHtml(item.provider)}</span></div>
+                    <div class="leaderboard-status-row"><span class="aa-status ${statusClass}">${statusText}</span>${selectableBadge}${priorBadge}</div>
                     <div class="leaderboard-cell-sub">${sourceLine}</div>
                 </td>
                 <td class="num"><strong class="leaderboard-iq">${leaderboardMetric(item.intelligence_index)}</strong></td>
@@ -1951,8 +1986,67 @@ function renderLeaderboardTable(leaderboard) {
                 <td class="num">${costTask}</td>
                 <td class="num leaderboard-price-cell">${formatLeaderboardPrice(item)}</td>
                 <td class="num">${formatLocalQuota(item)}</td>
-                <td class="num"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${item.local_sessions} phiên</div></td>
+                <td class="num"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${escapeHtml(localSessions)}</div></td>
                 <td class="leaderboard-decision-cell"><strong>${escapeHtml(decisionLabel)}</strong><div>${escapeHtml(decisionNote)}</div></td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function leaderboardDisplayName(modelKey) {
+    const normalized = normalizeLeaderboardKey(modelKey);
+    const match = enrichedLeaderboardRows.find(row => normalizeLeaderboardKey(row.model_name) === normalized);
+    return match?.display_name || modelKey || '—';
+}
+
+function renderLeaderboardRepairCapabilities() {
+    const tbody = document.getElementById('leaderboard-rescue-tbody');
+    const count = document.getElementById('leaderboard-rescue-count');
+    if (!tbody) return;
+
+    const categoryLabels = {
+        trading_setup: 'Học setup giao dịch',
+        web: 'Làm web',
+        simulation_3d: 'Mô phỏng 3D',
+        software_debugging: 'Sửa lỗi phần mềm',
+        research: 'Nghiên cứu & kiểm chứng',
+        documents: 'Xử lý tài liệu',
+        system_diagnostics: 'Chẩn đoán hệ thống',
+        other: 'Công việc khác',
+    };
+    const pairs = (leaderboardRepairCapabilities?.pairs || [])
+        .filter(row => Number(row.accepted_repairs || 0) > 0)
+        .slice(0, 20);
+    if (count) count.textContent = leaderboardText(`${pairs.length} cặp đã quan sát`);
+    if (!pairs.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="leaderboard-empty">Chưa có chuỗi sửa khác model đã đạt yêu cầu.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = pairs.map(row => {
+        const accepted = Number(row.accepted_repairs || 0);
+        const attempts = Number(row.attempts || 0);
+        const rate = Number(row.success_rate);
+        const hasQuota = hasLeaderboardMetric(row.median_repair_quota_pct_5h);
+        const quota = hasQuota ? Number(row.median_repair_quota_pct_5h) : null;
+        const hasDelta = hasLeaderboardMetric(row.intelligence_delta);
+        const delta = hasDelta ? Number(row.intelligence_delta) : null;
+        const categories = (row.categories || []).map(key => leaderboardText(categoryLabels[key] || key)).join(' · ') || leaderboardText('Chưa phân loại');
+        let prior = leaderboardText('AA chưa đủ dữ liệu để so sánh năng lực');
+        if (hasDelta && Number.isFinite(delta)) {
+            prior = leaderboardText(delta > 0
+                ? `AA Intelligence cao hơn ${delta.toFixed(0)} điểm`
+                : (delta === 0 ? 'AA Intelligence ngang nhau' : `AA Intelligence thấp hơn ${Math.abs(delta).toFixed(0)} điểm`));
+        }
+        const confidence = row.empirical_confidence || 'low';
+        return `
+            <tr>
+                <td><strong>${escapeHtml(leaderboardDisplayName(row.from_model))}</strong></td>
+                <td><strong>${escapeHtml(leaderboardDisplayName(row.to_model))}</strong></td>
+                <td>${escapeHtml(categories)}</td>
+                <td class="num"><strong>${accepted}/${attempts}</strong><div class="leaderboard-cell-sub">${Number.isFinite(rate) ? (rate * 100).toFixed(0) + '%' : '—'}</div></td>
+                <td class="num">${hasQuota && Number.isFinite(quota) ? `<strong>${quota.toFixed(2)}% 5h</strong><div class="leaderboard-cell-sub">n=${row.quota_sample_count || 0}</div>` : '<span class="leaderboard-na">Chưa đo được</span>'}</td>
+                <td><strong>${escapeHtml(leaderboardText(`Đã sửa thành công · tin cậy ${confidence}`))}</strong><div class="leaderboard-cell-sub"><span>${escapeHtml(prior)}</span><br><span>${escapeHtml(leaderboardText('AA chỉ là tín hiệu bổ trợ.'))}</span></div></td>
             </tr>
         `;
     }).join('');
@@ -1968,9 +2062,9 @@ function renderModelCards(leaderboard) {
     grid.innerHTML = recommended.map(m => `
         <div class="model-card">
             <div>
-                <div class="model-card-top"><h3>${escapeHtml(m.model_name)}</h3><span class="recommendation-order">Lựa chọn ${m.recommendation_order}</span></div>
-                <div class="model-card-badge">${escapeHtml(m.decision_label || m.badge)}</div>
-                <p class="model-card-desc">${escapeHtml(m.decision_note || m.best_for)}</p>
+                <div class="model-card-top"><h3>${escapeHtml(m.display_name || m.model_name)}</h3><span class="recommendation-order">${escapeHtml(leaderboardText(`Lựa chọn ${m.recommendation_order}`))}</span></div>
+                <div class="model-card-badge">${escapeHtml(leaderboardText(m.decision_label || m.badge))}</div>
+                <p class="model-card-desc">${escapeHtml(leaderboardText(m.decision_note || m.best_for))}</p>
                 <div class="model-card-metrics">
                     <div class="m-metric"><div class="m-metric-val" style="color:var(--purple-400);">${leaderboardMetric(m.intelligence_index)}</div><div class="m-metric-lbl">Intelligence</div></div>
                     <div class="m-metric"><div class="m-metric-val" style="color:var(--cyan-400);">${leaderboardMetric(m.speed_tps)}</div><div class="m-metric-lbl">Speed (t/s)</div></div>
@@ -1978,8 +2072,8 @@ function renderModelCards(leaderboard) {
                 </div>
             </div>
             <div class="model-card-empirical">
-                <span>Cục bộ: <strong>${formatNumber(m.local_total_tokens)} tokens</strong></span>
-                <span>${hasLeaderboardMetric(m.local_estimated_quota_pct_per_task) ? Number(m.local_estimated_quota_pct_per_task).toFixed(2) + '% quota/task' : 'chưa đủ mẫu quota/task'}</span>
+                <span>${escapeHtml(leaderboardText('Cục bộ:'))} <strong>${formatNumber(m.local_total_tokens)} tokens</strong></span>
+                <span>${hasLeaderboardMetric(m.local_estimated_quota_pct_per_task) ? Number(m.local_estimated_quota_pct_per_task).toFixed(2) + '% quota/task' : escapeHtml(leaderboardText('chưa đủ mẫu quota/task'))}</span>
             </div>
         </div>
     `).join('');

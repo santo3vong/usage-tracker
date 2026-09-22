@@ -1535,6 +1535,18 @@ body {
     border: 1px solid rgba(245, 158, 11, 0.32);
 }
 
+.aa-unavailable {
+    color: #cbd5e1;
+    background: rgba(100, 116, 139, 0.13);
+    border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.aa-selectable {
+    color: #c4b5fd;
+    background: rgba(139, 92, 246, 0.13);
+    border: 1px solid rgba(139, 92, 246, 0.32);
+}
+
 .aa-previous {
     color: #cbd5e1;
     background: rgba(100, 116, 139, 0.16);

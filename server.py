@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sqlite3
 import base64
 import tempfile
@@ -594,12 +595,19 @@ OPENAI_GPT56_OFFICIAL = {
     }
 }
 
-GPT56_REASONING_LABELS = ('none', 'low', 'standard', 'high', 'xhigh', 'max')
+GPT56_REASONING_LABELS_BY_FAMILY = {
+    # Codex exposes an additional Ultra effort for Sol and Terra. Artificial
+    # Analysis has not published a separate Ultra result, so those rows stay
+    # unranked while retaining verified provider pricing.
+    'sol': ('none', 'low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
+    'terra': ('none', 'low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
+    'luna': ('none', 'low', 'standard', 'high', 'xhigh', 'max'),
+}
 
 def register_openai_gpt56_models():
     """Merge official GPT-5.6 metadata into every reasoning-effort variant."""
     for family, official in OPENAI_GPT56_OFFICIAL.items():
-        for label in GPT56_REASONING_LABELS:
+        for label in GPT56_REASONING_LABELS_BY_FAMILY[family]:
             key = f'5.6 {family} {label}'
             entry = BENCHMARK_DATABASE.get(key)
             if entry is None:
@@ -641,7 +649,7 @@ OPENAI_VERIFIED_PRICING = {
         'price_in_1m': 10.00,
         'price_cached_in_1m': 1.00,
         'price_out_1m': 50.00,
-        'reasoning_labels': ('low', 'standard', 'high', 'xhigh', 'max'),
+        'reasoning_labels': ('low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
         'default_effort': 'medium',
         'knowledge_cutoff': '2026-04-30',
         'source_url': 'https://developers.openai.com/api/docs/models/gpt-6-astra',
@@ -765,6 +773,7 @@ def register_additional_verified_pricing():
         })
 
     for key, effort in (
+        ('Gemini 3.8 Flash (Low)', 'low'),
         ('Gemini 3.8 Flash', 'medium'),
         ('Gemini 3.8 Flash (High)', 'high'),
     ):
@@ -792,9 +801,76 @@ def register_additional_verified_pricing():
 
 register_additional_verified_pricing()
 
+
+# Exact choices exposed by the current Codex desktop runtime on this host.
+# Keep availability separate from AA coverage: a selectable model must remain
+# visible even when AA has not published a benchmark for that effort level.
+CODEX_SELECTABLE_MODELS_AS_OF = '2026-09-21'
+CODEX_SELECTABLE_MODEL_EFFORTS = {
+    'gpt-6-astra': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    'gpt-5.6-sol': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    'gpt-5.6-terra': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    'gpt-5.6-luna': ('low', 'medium', 'high', 'xhigh', 'max'),
+    'gpt-5.5': ('low', 'medium', 'high', 'xhigh'),
+}
+
+
+def _codex_catalog_key(model_id, effort):
+    label = 'standard' if effort == 'medium' else effort
+    if model_id.startswith('gpt-5.6-'):
+        return f"5.6 {model_id.removeprefix('gpt-5.6-')} {label}"
+    return f'{model_id} {label}'
+
+
+def _codex_selectable_display_name(model_id, effort):
+    family_names = {
+        'gpt-6-astra': 'GPT-6 Astra',
+        'gpt-5.6-sol': 'GPT-5.6 Sol',
+        'gpt-5.6-terra': 'GPT-5.6 Terra',
+        'gpt-5.6-luna': 'GPT-5.6 Luna',
+        'gpt-5.5': 'GPT-5.5',
+    }
+    return f"{family_names.get(model_id, model_id)} · {effort.capitalize()}"
+
+
+def register_codex_selectable_models():
+    family_labels = {
+        'gpt-6-astra': 'Astra',
+        'gpt-5.6-sol': 'Sol',
+        'gpt-5.6-terra': 'Terra',
+        'gpt-5.6-luna': 'Luna',
+        'gpt-5.5': 'GPT-5.5',
+    }
+    selection_order = 0
+    for model_id, efforts in CODEX_SELECTABLE_MODEL_EFFORTS.items():
+        for effort in efforts:
+            selection_order += 1
+            key = _codex_catalog_key(model_id, effort)
+            entry = BENCHMARK_DATABASE.get(key)
+            if entry is None:
+                entry = _blank_priced_model_entry()
+                entry.update({
+                    'model_id': model_id,
+                    'reasoning_effort': effort,
+                    'provider': 'OpenAI (Codex)',
+                    'metadata_source': 'Codex desktop runtime',
+                })
+                BENCHMARK_DATABASE[key] = entry
+            entry.update({
+                'selectable_in_codex': True,
+                'availability_source': 'Codex desktop runtime',
+                'availability_as_of': CODEX_SELECTABLE_MODELS_AS_OF,
+                'selection_order': selection_order,
+                'display_name': _codex_selectable_display_name(model_id, effort),
+                'family': entry.get('family') or family_labels[model_id],
+            })
+
+
+register_codex_selectable_models()
+
 ARTIFICIAL_ANALYSIS_SOURCE = 'Artificial Analysis'
-ARTIFICIAL_ANALYSIS_INDEX_VERSION = '4.3'
-ARTIFICIAL_ANALYSIS_AS_OF = '2026-09-09'
+ARTIFICIAL_ANALYSIS_INDEX_VERSION = '4.3.2'
+ARTIFICIAL_ANALYSIS_AS_OF = '2026-09-21'
 AA_LEADERBOARD_METRICS = (
     'intelligence_index',
     'coding_score',
@@ -804,34 +880,34 @@ AA_LEADERBOARD_METRICS = (
     'cost_per_task',
 )
 
-# Artificial Analysis Index v4.3 values checked against the linked release/model
-# pages on 2026-09-09. Only values shown by AA are copied. Some release pages
-# explicitly mark their v4.3 scores as estimates pending independent evaluation;
+# Artificial Analysis Index v4.3.2 values checked against the linked release/model
+# pages on 2026-09-21. Only values shown by AA are copied. Some release pages
+# explicitly mark their v4.3.2 scores as estimates pending independent evaluation;
 # that status is carried to the UI instead of presenting every row as measured.
 ARTIFICIAL_ANALYSIS_BENCHMARKS = {
     # Current frontier family.
     'gpt-6-astra low': {
-        'intelligence_index': 46.0, 'speed_tps': 47.0, 'cost_per_task': 0.82,
+        'intelligence_index': 46.0, 'speed_tps': 62.0, 'cost_per_task': 0.82,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-6-astra',
         'benchmark_status': 'measured', 'family': 'Astra',
     },
     'gpt-6-astra standard': {
-        'intelligence_index': 50.0, 'speed_tps': 47.0, 'cost_per_task': 1.54,
+        'intelligence_index': 50.0, 'speed_tps': 66.0, 'cost_per_task': 1.54,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-6-astra',
         'benchmark_status': 'measured', 'family': 'Astra',
     },
     'gpt-6-astra high': {
-        'intelligence_index': 51.0, 'speed_tps': 50.0, 'cost_per_task': 1.72,
+        'intelligence_index': 51.0, 'speed_tps': 65.0, 'cost_per_task': 1.73,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-6-astra',
         'benchmark_status': 'measured', 'family': 'Astra',
     },
     'gpt-6-astra xhigh': {
-        'intelligence_index': 53.0, 'speed_tps': 52.0, 'cost_per_task': 2.31,
+        'intelligence_index': 52.0, 'speed_tps': 66.0, 'cost_per_task': 2.31,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-6-astra',
         'benchmark_status': 'measured', 'family': 'Astra',
     },
     'gpt-6-astra max': {
-        'intelligence_index': 53.0, 'speed_tps': 56.0, 'cost_per_task': 3.26,
+        'intelligence_index': 53.0, 'speed_tps': 71.0, 'cost_per_task': 3.26,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-6-astra',
         'benchmark_status': 'measured', 'family': 'Astra',
         'recommended': True, 'recommendation_order': 1,
@@ -841,23 +917,23 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
 
     # GPT-5.6 Sol: strongest quality/quota balance in the local measurements.
     '5.6 sol none': {
-        'intelligence_index': 28.0, 'speed_tps': 66.0,
+        'intelligence_index': 28.0, 'speed_tps': 64.0,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
     },
     '5.6 sol low': {
-        'intelligence_index': 34.0, 'speed_tps': 67.0, 'cost_per_task': 0.26,
+        'intelligence_index': 33.0, 'speed_tps': 72.0, 'cost_per_task': 0.26,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
     },
     '5.6 sol standard': {
-        'intelligence_index': 39.0, 'speed_tps': 67.0, 'cost_per_task': 0.50,
+        'intelligence_index': 39.0, 'speed_tps': 68.0, 'cost_per_task': 0.50,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
         'benchmark_note': 'Mapped to the medium reasoning result.',
     },
     '5.6 sol high': {
-        'intelligence_index': 42.0, 'speed_tps': 68.0, 'cost_per_task': 0.81,
+        'intelligence_index': 42.0, 'speed_tps': 74.0, 'cost_per_task': 0.81,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
         'recommended': True, 'recommendation_order': 2,
@@ -865,7 +941,7 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
         'decision_note': 'Mặc định cho công việc hằng ngày; chất lượng tốt và quota/task cục bộ hiện thấp hơn XHigh.',
     },
     '5.6 sol xhigh': {
-        'intelligence_index': 44.0, 'speed_tps': 65.0, 'cost_per_task': 1.18,
+        'intelligence_index': 44.0, 'speed_tps': 74.0, 'cost_per_task': 1.18,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
         'recommended': True, 'recommendation_order': 3,
@@ -873,40 +949,40 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
         'decision_note': 'Điểm AA cao hơn High; dùng khi phần reasoning thêm có thể tránh làm lại, vì quota/task cục bộ hiện cao hơn High.',
     },
     '5.6 sol max': {
-        'intelligence_index': 47.0, 'speed_tps': 70.0, 'cost_per_task': 1.99,
+        'intelligence_index': 47.0, 'speed_tps': 75.0, 'cost_per_task': 1.99,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-sol',
         'benchmark_status': 'estimate', 'family': 'Sol',
     },
 
     # GPT-5.6 Terra: middle price tier.
     '5.6 terra none': {
-        'intelligence_index': 22.0, 'speed_tps': 94.0,
+        'intelligence_index': 21.0, 'speed_tps': 88.0, 'cost_per_task': 0.14,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
     },
     '5.6 terra low': {
-        'intelligence_index': 28.0, 'speed_tps': 93.0,
+        'intelligence_index': 27.0, 'speed_tps': 90.0, 'cost_per_task': 0.14,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
     },
     '5.6 terra standard': {
-        'intelligence_index': 33.0, 'speed_tps': 94.0,
+        'intelligence_index': 30.0, 'speed_tps': 96.0, 'cost_per_task': 0.18,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
         'benchmark_note': 'Mapped to the medium reasoning result.',
     },
     '5.6 terra high': {
-        'intelligence_index': 34.0, 'speed_tps': 95.0, 'cost_per_task': 0.34,
+        'intelligence_index': 34.0, 'speed_tps': 91.0, 'cost_per_task': 0.34,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
     },
     '5.6 terra xhigh': {
-        'intelligence_index': 38.0, 'speed_tps': 99.0, 'cost_per_task': 0.63,
+        'intelligence_index': 38.0, 'speed_tps': 104.0, 'cost_per_task': 0.63,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
     },
     '5.6 terra max': {
-        'intelligence_index': 42.0, 'speed_tps': 116.0, 'cost_per_task': 1.40,
+        'intelligence_index': 42.0, 'speed_tps': 106.0, 'cost_per_task': 1.40,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-terra',
         'benchmark_status': 'estimate', 'family': 'Terra',
         'recommended': True, 'recommendation_order': 4,
@@ -916,28 +992,28 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
 
     # GPT-5.6 Luna: high-volume/value tier.
     '5.6 luna none': {
-        'intelligence_index': 17.0, 'speed_tps': 118.0,
+        'intelligence_index': 16.0, 'speed_tps': 152.0, 'cost_per_task': 0.01,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
     },
     '5.6 luna low': {
-        'intelligence_index': 22.0, 'speed_tps': 116.0,
+        'intelligence_index': 21.0, 'speed_tps': 154.0, 'cost_per_task': 0.01,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
     },
     '5.6 luna standard': {
-        'intelligence_index': 26.0, 'speed_tps': 110.0,
+        'intelligence_index': 25.0, 'speed_tps': 154.0, 'cost_per_task': 0.02,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
         'benchmark_note': 'Mapped to the medium reasoning result.',
     },
     '5.6 luna high': {
-        'intelligence_index': 33.0, 'speed_tps': 116.0,
+        'intelligence_index': 32.0, 'speed_tps': 157.0, 'cost_per_task': 0.04,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
     },
     '5.6 luna xhigh': {
-        'intelligence_index': 35.0, 'speed_tps': 108.0, 'cost_per_task': 0.09,
+        'intelligence_index': 35.0, 'speed_tps': 165.0, 'cost_per_task': 0.09,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
         'recommended': True, 'recommendation_order': 5,
@@ -945,14 +1021,14 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
         'decision_note': 'Chi phí AA/task thấp nhất trong nhóm khuyến nghị; hợp với việc dễ kiểm chứng và chạy số lượng lớn.',
     },
     '5.6 luna max': {
-        'intelligence_index': 38.0, 'speed_tps': 120.0, 'cost_per_task': 0.18,
+        'intelligence_index': 37.0, 'speed_tps': 165.0, 'cost_per_task': 0.18,
         'source_url': 'https://artificialanalysis.ai/models/releases/gpt-5-6-luna',
         'benchmark_status': 'estimate', 'family': 'Luna',
     },
 
     # Google Flash models that are selectable or present in local history.
     'Gemini 3.8 Flash (High)': {
-        'intelligence_index': 41.0, 'speed_tps': 281.0, 'cost_per_task': 1.24,
+        'intelligence_index': 41.0, 'speed_tps': 329.0, 'cost_per_task': 1.24,
         'source_url': 'https://artificialanalysis.ai/models/releases/gemini-3-8-flash',
         'benchmark_status': 'measured', 'family': 'Gemini 3.8',
         'recommended': True, 'recommendation_order': 6,
@@ -964,6 +1040,11 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
         'source_url': 'https://artificialanalysis.ai/models/releases/gemini-3-8-flash',
         'benchmark_status': 'measured', 'family': 'Gemini 3.8',
         'benchmark_note': 'Mapped to the medium reasoning result.',
+    },
+    'Gemini 3.8 Flash (Low)': {
+        'intelligence_index': 33.0,
+        'source_url': 'https://artificialanalysis.ai/models/releases/gemini-3-8-flash',
+        'benchmark_status': 'measured', 'family': 'Gemini 3.8',
     },
     'Gemini 3.7 Flash (High)': {
         'intelligence_index': 39.0, 'speed_tps': 310.0, 'cost_per_task': 0.93,
@@ -1108,7 +1189,7 @@ def normalize_codex_model_effort(model_name, effort=None):
     raw_e = str(effort or '').strip().lower() if effort is not None else ''
 
     extracted_effort = None
-    for ef in ('xhigh', 'standard', 'medium', 'default', 'high', 'none', 'low', 'max'):
+    for ef in ('ultra', 'xhigh', 'standard', 'medium', 'default', 'high', 'none', 'low', 'max'):
         if raw_m_clean.endswith(' ' + ef):
             extracted_effort = ef
             raw_m_clean = raw_m_clean[:-len(ef)-1].strip()
@@ -6562,6 +6643,133 @@ def _codex_mission_primary_model(mission):
     return ''
 
 
+def _codex_build_repair_capabilities(missions):
+    """Summarize accepted cross-model repair evidence.
+
+    A terminal accepted repair is evidence that its model repaired every distinct
+    model earlier in the same repair chain.  Failed/intermediate repair missions
+    still count as attempts, but never as successful rescues.  Artificial
+    Analysis intelligence is attached only as a capability prior; it does not
+    turn an unobserved pair into an empirical success.
+    """
+    by_id = {
+        str(mission.get('id') or ''): mission
+        for mission in missions or []
+        if mission.get('id')
+    }
+    pairs = {}
+
+    for mission in missions or []:
+        repair_of = str(mission.get('repair_of_mission_id') or '')
+        target_model = _codex_mission_primary_model(mission)
+        if not repair_of or not target_model:
+            continue
+
+        ancestors = []
+        seen_ids = set()
+        current_id = repair_of
+        while current_id and current_id not in seen_ids:
+            seen_ids.add(current_id)
+            ancestor = by_id.get(current_id)
+            if ancestor is None:
+                break
+            ancestors.append(ancestor)
+            current_id = str(ancestor.get('repair_of_mission_id') or '')
+
+        # Every cross-model repair is an attempt against its direct predecessor.
+        # Once the terminal repair is accepted, it also proves a successful path
+        # back to each earlier distinct model in the chain.
+        sources = ancestors if mission.get('accepted') else ancestors[:1]
+        seen_source_models = set()
+        for ancestor in sources:
+            source_model = _codex_mission_primary_model(ancestor)
+            if (not source_model or source_model == target_model or
+                    source_model in seen_source_models):
+                continue
+            seen_source_models.add(source_model)
+            key = (source_model, target_model)
+            item = pairs.setdefault(key, {
+                'from_model': source_model,
+                'to_model': target_model,
+                'attempts': 0,
+                'accepted_repairs': 0,
+                'accepted_mission_ids': [],
+                'categories': set(),
+                'quota_samples': [],
+                'link_confidences': [],
+            })
+            item['attempts'] += 1
+            item['link_confidences'].append(str(mission.get('repair_link_confidence') or 'low'))
+            if mission.get('accepted'):
+                item['accepted_repairs'] += 1
+                item['accepted_mission_ids'].append(mission.get('id'))
+                item['categories'].update(
+                    mission.get('repair_penalty_categories') or
+                    ancestor.get('categories') or
+                    [ancestor.get('category') or 'other']
+                )
+                quota = mission.get('quota_pct_5h')
+                if quota is not None:
+                    try:
+                        item['quota_samples'].append(float(quota))
+                    except (TypeError, ValueError):
+                        pass
+
+    rows = []
+    for item in pairs.values():
+        source_metrics = get_verified_aa_metrics(get_benchmark_for_model(item['from_model']))
+        target_metrics = get_verified_aa_metrics(get_benchmark_for_model(item['to_model']))
+        source_iq = source_metrics.get('intelligence_index')
+        target_iq = target_metrics.get('intelligence_index')
+        iq_delta = (
+            round(float(target_iq) - float(source_iq), 2)
+            if source_iq is not None and target_iq is not None else None
+        )
+        accepted = item['accepted_repairs']
+        attempts = item['attempts']
+        confidences = item['link_confidences']
+        empirical_confidence = 'low'
+        if accepted >= 3 and all(value in {'high', 'manual'} for value in confidences):
+            empirical_confidence = 'high'
+        elif accepted >= 2 or (accepted >= 1 and any(value == 'manual' for value in confidences)):
+            empirical_confidence = 'medium'
+        rows.append({
+            'from_model': item['from_model'],
+            'to_model': item['to_model'],
+            'attempts': attempts,
+            'accepted_repairs': accepted,
+            'success_rate': round(accepted / attempts, 4) if attempts else None,
+            'categories': sorted(item['categories']),
+            'median_repair_quota_pct_5h': (
+                round(float(statistics.median(item['quota_samples'])), 4)
+                if item['quota_samples'] else None
+            ),
+            'quota_sample_count': len(item['quota_samples']),
+            'source_intelligence_index': source_iq,
+            'target_intelligence_index': target_iq,
+            'intelligence_delta': iq_delta,
+            'capability_prior': (
+                'higher' if iq_delta is not None and iq_delta > 0
+                else ('not_higher' if iq_delta is not None else 'unavailable')
+            ),
+            'empirical_confidence': empirical_confidence,
+            'accepted_mission_ids': item['accepted_mission_ids'],
+        })
+
+    rows.sort(key=lambda row: (
+        row['accepted_repairs'] > 0,
+        row['accepted_repairs'],
+        row['success_rate'] if row['success_rate'] is not None else -1,
+        -(row['median_repair_quota_pct_5h'] or 10**9),
+    ), reverse=True)
+    return {
+        'pairs': rows,
+        'accepted_pair_count': sum(1 for row in rows if row['accepted_repairs'] > 0),
+        'method': 'accepted_cross_model_repair_chains',
+        'capability_prior': 'artificial_analysis_intelligence_v4.3.2',
+    }
+
+
 def _codex_apply_repair_penalties(missions):
     for mission in missions:
         mission['repair_of_mission_id'] = None
@@ -8484,6 +8692,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
     audit_cases, audit_groups, audit_patterns = _codex_collect_audit_cases(missions)
     unconfirmed_groups = _codex_collect_unconfirmed_groups(missions)
     repair_accounting = _codex_repair_accounting_summary(missions)
+    repair_capabilities = _codex_build_repair_capabilities(missions)
     matrices = {
         '90': _codex_task_matrix(missions, 90, now_utc),
         '180': _codex_task_matrix(missions, 180, now_utc),
@@ -8520,6 +8729,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         'audit_patterns': audit_patterns,
         'unconfirmed_groups': unconfirmed_groups,
         'repair_accounting': repair_accounting,
+        'repair_capabilities': repair_capabilities,
         'matrices': matrices,
         'summary': {
             'mission_count': len(missions),
@@ -11414,20 +11624,45 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         'diagnostics': worker_usage.get('diagnostics', {}),
     }
 
+    # Load Codex usage before building the leaderboard so locally observed
+    # models can appear even when AA has not published a benchmark row yet.
+    codex_db = load_codex_usage()
+    codex_rate_limits = get_codex_rate_limits()
+    codex_db['rate_limits'] = codex_rate_limits
+    codex_auto_models = scan_codex_model_usage()
+    if 'quota_efficiency_timeline' not in codex_auto_models:
+        codex_auto_models = dict(codex_auto_models)
+        codex_auto_models['quota_efficiency_timeline'] = build_codex_quota_efficiency_timeline(
+            codex_auto_models.get('quota_observations') or []
+        )
+    codex_db['automatic_model_usage'] = codex_auto_models
+
+    automatic_model_rows = codex_auto_models.get('models') or {}
+    automatic_model_keys = (
+        list(automatic_model_rows.keys())
+        if isinstance(automatic_model_rows, dict)
+        else [row.get('model_name') for row in automatic_model_rows if isinstance(row, dict)]
+    )
+    locally_observed_keys = {
+        key for key in list(global_models_stats.keys()) + automatic_model_keys
+        if isinstance(key, str) and key.strip()
+    }
+
     # Leaderboard calculation
     leaderboard = []
-    # Keep this table useful and auditable: only rows tied to the current
-    # Artificial Analysis dataset belong in the AA leaderboard. Local-only
-    # catalog heuristics remain available elsewhere in the tracker.
-    all_model_keys = [
-        key for key, entry in BENCHMARK_DATABASE.items()
-        if entry.get('benchmark_source') == ARTIFICIAL_ANALYSIS_SOURCE
-    ]
+    # Include every AA row, every currently selectable Codex choice, and every
+    # locally observed model. Unbenchmarked rows remain explicitly unranked;
+    # local heuristic scores are never presented as AA measurements.
+    all_model_keys = list(dict.fromkeys(
+        [
+            key for key, entry in BENCHMARK_DATABASE.items()
+            if (entry.get('benchmark_source') == ARTIFICIAL_ANALYSIS_SOURCE or
+                entry.get('selectable_in_codex'))
+        ] + sorted(locally_observed_keys)
+    ))
 
     for m_key in all_model_keys:
         bm = get_benchmark_for_model(m_key)
-        if bm.get('benchmark_source') != ARTIFICIAL_ANALYSIS_SOURCE:
-            continue
         emp = global_models_stats.get(m_key, {
             'model_name': m_key,
             'sessions_count': 0,
@@ -11446,6 +11681,7 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         })
 
         aa_metrics = get_verified_aa_metrics(bm)
+        effective_pricing = get_effective_pricing(m_key) or {}
         intelligence_index = aa_metrics['intelligence_index']
         cost_per_task = aa_metrics['cost_per_task']
         val_score = (
@@ -11459,15 +11695,23 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
 
         leaderboard.append({
             'model_name': m_key,
-            'provider': bm['provider'],
+            'display_name': bm.get('display_name') or m_key,
+            'provider': bm.get('provider', 'Custom'),
             'intelligence_index': intelligence_index,
             'coding_score': aa_metrics['coding_score'],
             'reasoning_score': aa_metrics['reasoning_score'],
             'speed_tps': aa_metrics['speed_tps'],
             'ttft_sec': aa_metrics['ttft_sec'],
-            'price_in_1m': bm['price_in_1m'],
-            'price_cached_in_1m': bm.get('price_cached_in_1m'),
-            'price_out_1m': bm['price_out_1m'],
+            'price_in_1m': (bm.get('price_in_1m') if bm.get('price_in_1m') is not None
+                            else effective_pricing.get('price_in_1m')),
+            'price_cached_in_1m': (
+                bm.get('price_cached_in_1m') if bm.get('price_cached_in_1m') is not None
+                else effective_pricing.get('price_cached_in_1m')
+            ),
+            'price_out_1m': (bm.get('price_out_1m') if bm.get('price_out_1m') is not None
+                             else effective_pricing.get('price_out_1m')),
+            'pricing_estimated': bool(effective_pricing.get('pricing_estimated')),
+            'pricing_basis_model': effective_pricing.get('pricing_basis_model'),
             'cost_per_task': cost_per_task,
             'context_window': bm['context_window'],
             'max_input_tokens': bm.get('max_input_tokens'),
@@ -11487,8 +11731,14 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
             'decision_note': bm.get('decision_note'),
             'generation_status': bm.get('generation_status', 'current'),
             'metadata_source': bm.get('metadata_source'),
-            'badge': bm['badge'],
-            'best_for': bm['best_for'],
+            'metadata_source_url': bm.get('metadata_source_url'),
+            'selectable_in_codex': bool(bm.get('selectable_in_codex')),
+            'availability_source': bm.get('availability_source'),
+            'availability_as_of': bm.get('availability_as_of'),
+            'selection_order': bm.get('selection_order'),
+            'observed_locally': m_key in locally_observed_keys,
+            'badge': bm.get('badge', 'Chưa có benchmark'),
+            'best_for': bm.get('best_for', 'Chưa có metadata đáng tin cậy cho model này.'),
             'value_score': val_score,
             'local_sessions': emp['sessions_count'],
             'local_responses': emp['model_responses'],
@@ -11514,17 +11764,6 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
     # Time-Series Analytics & Snapshot Persistence
     record_time_series_snapshot(quotas_data, conversations)
     time_series_analytics = build_time_series_analytics(all_step_events, quotas_data)
-
-    codex_db = load_codex_usage()
-    codex_rate_limits = get_codex_rate_limits()
-    codex_db['rate_limits'] = codex_rate_limits
-    codex_auto_models = scan_codex_model_usage()
-    if 'quota_efficiency_timeline' not in codex_auto_models:
-        codex_auto_models = dict(codex_auto_models)
-        codex_auto_models['quota_efficiency_timeline'] = build_codex_quota_efficiency_timeline(
-            codex_auto_models.get('quota_observations') or []
-        )
-    codex_db['automatic_model_usage'] = codex_auto_models
 
     summary = {
         'total_conversations': len(conversations),

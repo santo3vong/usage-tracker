@@ -35,9 +35,31 @@ class ModelCatalogTests(unittest.TestCase):
         self._temp_dir.cleanup()
 
     def test_gpt56_registers_all_reasoning_variants(self):
-        for family in ('sol', 'terra', 'luna'):
-            for label in ('none', 'low', 'standard', 'high', 'xhigh', 'max'):
+        expected = {
+            'sol': ('none', 'low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
+            'terra': ('none', 'low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
+            'luna': ('none', 'low', 'standard', 'high', 'xhigh', 'max'),
+        }
+        for family, labels in expected.items():
+            for label in labels:
                 self.assertIn(f'5.6 {family} {label}', server.BENCHMARK_DATABASE)
+
+    def test_current_codex_picker_choices_are_registered_even_without_aa_scores(self):
+        selectable = {
+            key for key, value in server.BENCHMARK_DATABASE.items()
+            if value.get('selectable_in_codex')
+        }
+        self.assertEqual(len(selectable), 27)
+        for name in ('gpt-6-astra ultra', '5.6 sol ultra', '5.6 terra ultra'):
+            self.assertIn(name, selectable)
+            model = server.get_benchmark_for_model(name)
+            self.assertEqual(model['reasoning_effort'], 'ultra')
+            self.assertEqual(model['benchmark_source'], 'unbenchmarked')
+            self.assertIsNone(model['intelligence_index'])
+            self.assertEqual(model['availability_source'], 'Codex desktop runtime')
+            self.assertEqual(model['availability_as_of'], '2026-09-21')
+
+        self.assertNotIn('5.6 luna ultra', selectable)
 
     def test_sol_uses_official_price_and_context(self):
         model = server.get_benchmark_for_model('gpt-5.6-sol xhigh')
@@ -76,9 +98,9 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertEqual((terra['price_in_1m'], terra['price_out_1m']), (2.0, 12.0))
         self.assertEqual((luna['price_in_1m'], luna['price_out_1m']), (0.2, 1.2))
         self.assertEqual(terra['intelligence_index'], 34.0)
-        self.assertEqual(terra['speed_tps'], 95.0)
-        self.assertEqual(luna['intelligence_index'], 38.0)
-        self.assertEqual(luna['speed_tps'], 120.0)
+        self.assertEqual(terra['speed_tps'], 91.0)
+        self.assertEqual(luna['intelligence_index'], 37.0)
+        self.assertEqual(luna['speed_tps'], 165.0)
         self.assertIsNone(luna['coding_score'])
         self.assertEqual(terra['benchmark_source'], 'Artificial Analysis')
         self.assertEqual(luna['benchmark_source'], 'Artificial Analysis')
@@ -132,9 +154,10 @@ class ModelCatalogTests(unittest.TestCase):
         self.assertAlmostEqual(cost, 0.855, places=6)
 
     def test_gemini_38_flash_uses_current_official_pricing(self):
+        low = server.get_benchmark_for_model('Gemini 3.8 Flash (Low)')
         medium = server.get_benchmark_for_model('Gemini 3.8 Flash')
         high = server.get_benchmark_for_model('Gemini 3.8 Flash (High)')
-        for model in (medium, high):
+        for model in (low, medium, high):
             self.assertEqual(model['model_id'], 'gemini-3.8-flash')
             self.assertEqual(model['price_in_1m'], 0.75)
             self.assertEqual(model['price_cached_in_1m'], 0.075)
@@ -146,6 +169,8 @@ class ModelCatalogTests(unittest.TestCase):
 
         self.assertEqual(medium['reasoning_effort'], 'medium')
         self.assertEqual(high['reasoning_effort'], 'high')
+        self.assertEqual(low['reasoning_effort'], 'low')
+        self.assertEqual(low['intelligence_index'], 33.0)
 
     def test_gpt55_and_gpt54_observed_variants_use_official_pricing(self):
         gpt55 = server.get_benchmark_for_model('gpt-5.5 xhigh')
@@ -165,7 +190,7 @@ class ModelCatalogTests(unittest.TestCase):
     def test_verified_artificial_analysis_scores_are_registered(self):
         expected = {
             'gpt-6-astra high': 51.0,
-            'gpt-6-astra xhigh': 53.0,
+            'gpt-6-astra xhigh': 52.0,
             'gpt-6-astra max': 53.0,
             'gpt-5.5 xhigh': 39.0,
             'gpt-5.5 high': 37.0,
@@ -182,8 +207,8 @@ class ModelCatalogTests(unittest.TestCase):
             self.assertEqual(model['intelligence_index'], score, name)
             self.assertEqual(model['benchmark_source'], 'Artificial Analysis', name)
             self.assertTrue(model['benchmark_source_url'].startswith('https://artificialanalysis.ai/'), name)
-            self.assertEqual(model['benchmark_as_of'], '2026-09-09', name)
-            self.assertEqual(model['benchmark_index_version'], '4.3', name)
+            self.assertEqual(model['benchmark_as_of'], '2026-09-21', name)
+            self.assertEqual(model['benchmark_index_version'], '4.3.2', name)
 
     def test_aa_leaderboard_hides_local_heuristic_scores(self):
         heuristic = server.get_benchmark_for_model('Claude Opus 4.6 (Thinking)')
@@ -196,7 +221,7 @@ class ModelCatalogTests(unittest.TestCase):
         verified = server.get_benchmark_for_model('gpt-6-astra high')
         visible = server.get_verified_aa_metrics(verified)
         self.assertEqual(visible['intelligence_index'], 51.0)
-        self.assertEqual(visible['cost_per_task'], 1.72)
+        self.assertEqual(visible['cost_per_task'], 1.73)
 
     def test_aa_ranking_uses_dense_ties_and_leaves_unverified_unranked(self):
         rows = [
