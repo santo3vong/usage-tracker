@@ -4,6 +4,14 @@ All notable public changes to Usage Tracker will be documented here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-25
+
+### Fixed
+
+- Corrected the task-completion-time chart to show a separate rolling mean for every `model + effort`, with persistent multi-model selection and a latest-window comparison table showing mean, median, and sample counts.
+- Attribute completion time only to accepted single-model tasks with complete timestamps; exclude mixed-model and separately linked repair missions instead of presenting one misleading aggregate line.
+- Label sparse windows and explain that time comparisons are not adjusted for task type or difficulty.
+
 ## [0.4.0] - 2026-09-25
 
 ### Added

@@ -48,7 +48,7 @@ To address these measurement needs, Usage Tracker answers concrete operational q
 
 ![Model token and estimated-cost trends](docs/screenshots/token-cost-trend-2026-09-25.png)
 
-The new **Average Task Completion Time** line chart tracks measured active time from completed Codex turns. It offers 30/90/180-day ranges and 7/14/30-day rolling means. Waiting between later corrections is excluded; tasks without completion timestamps are never treated as zero-minute tasks.
+The **Average Task Completion Time by Model** chart draws a separate line for each Codex model + effort, with a multi-select legend and a comparison table showing the latest mean, median, and sample counts. It offers 30/90/180-day ranges and 7/14/30-day rolling windows. Only accepted tasks handled from start to finish by one model with complete work timestamps are attributed; mixed-model tasks and separately linked repair missions are excluded. Waiting between turns is excluded. These observed averages are not adjusted for differences in task type or difficulty, and inferred acceptances remain identifiable through the reviewed-sample count.
 
 ## Features: Instantaneous vs. Average Usage
 

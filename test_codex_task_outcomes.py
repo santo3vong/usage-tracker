@@ -50,7 +50,8 @@ class CodexTaskOutcomeTests(unittest.TestCase):
     def test_duration_timeline_excludes_user_gaps_and_overlapping_work(self):
         mission = {
             'accepted': True, 'end_at': '2026-09-25T10:00:00Z',
-            'outcome_reviewed': True,
+            'outcome_reviewed': True, 'pure_model': True,
+            'model_key': '5.6 sol high',
             'turns': [
                 {'completed': True, 'started_at': '2026-09-25T08:00:00Z',
                  'completed_at': '2026-09-25T08:30:00Z'},
@@ -62,22 +63,49 @@ class CodexTaskOutcomeTests(unittest.TestCase):
         }
         second = {
             'accepted': True, 'end_at': '2026-09-24T11:00:00Z',
+            'pure_model': True, 'model_key': 'gpt-6-sol max',
             'turns': [{'completed': True,
                        'started_at': '2026-09-24T10:00:00Z',
                        'completed_at': '2026-09-24T11:00:00Z'}],
         }
         unresolved = {**mission, 'accepted': False}
-        unknown = {'accepted': True, 'end_at': '2026-09-25T12:00:00Z', 'turns': []}
+        unknown = {'accepted': True, 'end_at': '2026-09-25T12:00:00Z',
+                   'pure_model': True, 'model_key': '5.6 sol high', 'turns': []}
+        mixed = {**mission, 'pure_model': False}
+        repair = {**second, 'repair_of_mission_id': 'failed-mission'}
         self.assertEqual(server._codex_mission_active_minutes(mission), 50)
         timeline = server.build_codex_task_duration_timeline(
-            [mission, second, unresolved, unknown],
+            [mission, second, unresolved, unknown, mixed, repair],
             now=datetime(2026, 9, 25, tzinfo=timezone.utc), days=3, windows=(1, 7),
         )
-        latest = timeline['windows']['7']['points'][-1]
-        self.assertEqual(latest['task_count'], 2)
-        self.assertEqual(latest['reviewed_count'], 1)
-        self.assertEqual(latest['mean_minutes'], 55)
-        self.assertEqual(timeline['windows']['1']['points'][-1]['mean_minutes'], 50)
+        rows = {row['model_key']: row for row in timeline['windows']['7']['models']}
+        self.assertEqual(timeline['task_count'], 2)
+        self.assertEqual(rows['5.6 sol high']['points'][-1]['mean_minutes'], 50)
+        self.assertEqual(rows['5.6 sol high']['points'][-1]['reviewed_count'], 1)
+        self.assertEqual(rows['gpt-6-sol max']['points'][-1]['mean_minutes'], 60)
+        self.assertEqual(rows['5.6 sol high']['daily_task_counts'], [0, 0, 1])
+        one_day = {row['model_key']: row for row in timeline['windows']['1']['models']}
+        self.assertIsNone(one_day['gpt-6-sol max']['points'][-1]['mean_minutes'])
+        self.assertEqual(timeline['missing_duration_count'], 1)
+        self.assertEqual(timeline['mixed_excluded_count'], 1)
+        self.assertEqual(timeline['repair_excluded_count'], 1)
+
+    def test_duration_timeline_rejects_partially_timed_missions(self):
+        mission = {
+            'accepted': True, 'pure_model': True, 'model_key': '5.6 luna xhigh',
+            'end_at': '2026-09-25T10:00:00Z',
+            'turns': [
+                {'completed': True, 'started_at': '2026-09-25T08:00:00Z',
+                 'completed_at': '2026-09-25T08:30:00Z'},
+                {'completed': False, 'started_at': '2026-09-25T09:00:00Z',
+                 'completed_at': ''},
+            ],
+        }
+        self.assertIsNone(server._codex_mission_active_minutes(mission))
+        timeline = server.build_codex_task_duration_timeline(
+            [mission], now=datetime(2026, 9, 25, tzinfo=timezone.utc), days=1,
+        )
+        self.assertFalse(timeline['available'])
         self.assertEqual(timeline['missing_duration_count'], 1)
 
     def test_repair_capabilities_use_only_accepted_terminal_repairs_as_success(self):

@@ -9072,12 +9072,14 @@ def _codex_mission_active_minutes(mission):
     """Observed wall-clock union of completed work turns, excluding user pauses."""
     intervals = []
     for turn in mission.get('turns') or []:
+        # A partial mission would systematically understate a model's time.
         if not isinstance(turn, dict) or not turn.get('completed'):
-            continue
+            return None
         start = _parse_iso_utc(turn.get('started_at'))
         end = _parse_iso_utc(turn.get('completed_at'))
-        if start is not None and end is not None and end > start:
-            intervals.append((start, end))
+        if start is None or end is None or end <= start:
+            return None
+        intervals.append((start, end))
     if not intervals:
         return None
     intervals.sort()
@@ -9092,52 +9094,83 @@ def _codex_mission_active_minutes(mission):
 
 def build_codex_task_duration_timeline(missions, now=None, days=180,
                                        windows=(7, 14, 30)):
-    """Rolling mean active minutes for accepted missions with measured turn times."""
+    """Rolling active completion time by model for attributable accepted missions."""
     now_utc = _parse_iso_utc(now) if not isinstance(now, datetime) else now
     now_utc = (now_utc or datetime.now(timezone.utc)).astimezone(timezone.utc)
     days = max(1, int(days))
     first_day = now_utc.date() - timedelta(days=days - 1)
-    daily = {}
+    daily_by_model = {}
+    model_totals = {}
     missing_duration = 0
+    mixed_excluded = 0
+    repair_excluded = 0
     for mission in missions or []:
         if not isinstance(mission, dict) or not mission.get('accepted'):
             continue
         end = _parse_iso_utc(mission.get('end_at'))
         if end is None or not first_day <= end.date() <= now_utc.date():
             continue
+        if mission.get('repair_of_mission_id'):
+            repair_excluded += 1
+            continue
+        model_key = str(mission.get('model_key') or '').strip()
+        if mission.get('pure_model') is not True or not model_key:
+            mixed_excluded += 1
+            continue
         minutes = _codex_mission_active_minutes(mission)
         if minutes is None:
             missing_duration += 1
             continue
-        daily.setdefault(end.date(), []).append({
+        sample = {
             'minutes': minutes,
             'reviewed': bool(mission.get('outcome_reviewed')),
+        }
+        daily_by_model.setdefault(model_key, {}).setdefault(end.date(), []).append(sample)
+        total = model_totals.setdefault(model_key, {
+            'model_key': model_key, 'task_count': 0, 'reviewed_count': 0,
+            'last_observed_at': '',
         })
+        total['task_count'] += 1
+        total['reviewed_count'] += int(sample['reviewed'])
+        total['last_observed_at'] = max(total['last_observed_at'], end.isoformat())
     dates = [(first_day + timedelta(days=index)) for index in range(days)]
+    ordered_models = sorted(model_totals.values(),
+                            key=lambda item: (-item['task_count'], item['model_key']))
     result = {}
     for window in windows:
         width = max(1, int(window))
-        points = []
-        for day in dates:
-            samples = [item for offset in range(width)
-                       for item in daily.get(day - timedelta(days=offset), [])]
-            values = [item['minutes'] for item in samples]
-            points.append({
-                'date': day.isoformat(),
-                'mean_minutes': round(statistics.mean(values), 2) if values else None,
-                'median_minutes': round(statistics.median(values), 2) if values else None,
-                'task_count': len(values),
-                'reviewed_count': sum(bool(item['reviewed']) for item in samples),
+        models = []
+        for model in ordered_models:
+            daily = daily_by_model[model['model_key']]
+            points = []
+            for day in dates:
+                samples = [item for offset in range(width)
+                           for item in daily.get(day - timedelta(days=offset), [])]
+                values = [item['minutes'] for item in samples]
+                points.append({
+                    'date': day.isoformat(),
+                    'mean_minutes': round(statistics.mean(values), 2) if values else None,
+                    'median_minutes': round(statistics.median(values), 2) if values else None,
+                    'task_count': len(values),
+                    'reviewed_count': sum(bool(item['reviewed']) for item in samples),
+                })
+            models.append({
+                **model,
+                'daily_task_counts': [len(daily.get(day, [])) for day in dates],
+                'points': points,
             })
-        result[str(width)] = {'points': points}
+        result[str(width)] = {'models': models}
     return {
-        'available': bool(daily),
+        'available': bool(ordered_models),
         'source': 'Local Codex completed-turn timestamps',
         'generated_at': now_utc.isoformat(),
         'dates': [day.isoformat() for day in dates],
         'windows': result,
-        'task_count': sum(len(items) for items in daily.values()),
+        'task_count': sum(item['task_count'] for item in ordered_models),
+        'model_count': len(ordered_models),
         'missing_duration_count': missing_duration,
+        'mixed_excluded_count': mixed_excluded,
+        'repair_excluded_count': repair_excluded,
     }
 
 

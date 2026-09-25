@@ -2860,6 +2860,12 @@ body.is-resizing-table-column * {
     line-height: 1.55;
 }
 
+.task-duration-sparse {
+    color: var(--amber-400, #fbbf24);
+    font-size: 0.7rem;
+    white-space: nowrap;
+}
+
 .quota-timeline-table-wrap {
     margin: 0.9rem 0 0;
 }

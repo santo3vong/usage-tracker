@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=20260925-dashboard-2">
+    <link rel="stylesheet" href="style.css?v=20260925-dashboard-4">
 </head>
 <body>
     <div class="app-container">
@@ -1433,8 +1433,8 @@
                 <div class="card quota-timeline-card">
                     <div class="quota-timeline-header">
                         <div>
-                            <h3>Thời Gian Trung Bình Hoàn Thành Nhiệm Vụ</h3>
-                            <p>Đường trung bình trượt của thời gian xử lý thực đo từ các lượt Codex đã hoàn tất. Các khoảng chờ giữa những lần bạn quay lại sửa không được cộng vào thời gian xử lý.</p>
+                            <h3>Thời Gian Hoàn Thành Trung Bình Theo Model</h3>
+                            <p>Mỗi đường là thời gian xử lý trung bình của một model + effort cho nhiệm vụ đã đạt yêu cầu. Chỉ dùng nhiệm vụ do một model làm từ đầu đến cuối; khoảng chờ giữa các lượt được loại trừ.</p>
                         </div>
                         <div class="quota-timeline-controls">
                             <label for="task-duration-range">Phạm vi</label>
@@ -1452,8 +1452,23 @@
                         </div>
                     </div>
                     <div id="task-duration-status" class="quota-timeline-status"></div>
+                    <div id="task-duration-legend" class="quota-timeline-legend" aria-label="Chọn model trong biểu đồ thời gian hoàn thành"></div>
                     <div class="quota-timeline-canvas-wrap">
-                        <canvas id="canvas-task-duration" role="img" aria-label="Xu hướng thời gian xử lý trung bình của nhiệm vụ Codex đã hoàn tất"></canvas>
+                        <canvas id="canvas-task-duration" role="img" aria-label="Thời gian hoàn thành trung bình theo model của nhiệm vụ Codex đã đạt yêu cầu"></canvas>
+                    </div>
+                    <div class="table-container quota-timeline-table-wrap">
+                        <table class="data-table" id="task-duration-recent-table">
+                            <thead><tr>
+                                <th style="min-width:180px;">Model + Effort</th>
+                                <th class="num" style="min-width:145px;">Trung Bình Cửa Sổ</th>
+                                <th class="num" style="min-width:140px;">Trung Vị Cửa Sổ</th>
+                                <th class="num" style="min-width:145px;">Mẫu Cửa Sổ</th>
+                                <th class="num" style="min-width:135px;">Mẫu Phạm Vi</th>
+                                <th class="num" style="min-width:135px;">Đã Xác Nhận</th>
+                                <th style="min-width:155px;">Ghi Nhận Gần Nhất</th>
+                            </tr></thead>
+                            <tbody id="task-duration-recent-body"><tr><td colspan="7">Đang đọc dữ liệu thời gian theo model…</td></tr></tbody>
+                        </table>
                     </div>
                     <div class="task-duration-details" id="task-duration-details"></div>
                 </div>
@@ -1891,7 +1906,7 @@
 
     <!-- Fallback data for offline/file-protocol mode -->
     <script src="data.js"></script>
-    <script src="i18n.js?v=20260925-dashboard-2"></script>
-    <script src="app.js?v=20260925-dashboard-2"></script>
+    <script src="i18n.js?v=20260925-dashboard-4"></script>
+    <script src="app.js?v=20260925-dashboard-4"></script>
 </body>
 </html>

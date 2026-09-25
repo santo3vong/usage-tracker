@@ -3444,6 +3444,7 @@ let currentTaskOutcomeAuditReasonFilter = typeof uiPreferences.taskOutcomeAuditR
     : 'all';
 let currentTaskDurationRange = savedChoice('taskDurationRange', ['30', '90', '180'], '90');
 let currentTaskDurationWindow = savedChoice('taskDurationWindow', ['7', '14', '30'], '14');
+let currentTaskDurationSelection = savedModelSelection('taskDurationSelection');
 
 function renderModelsBreakdown(breakdown, codexUsage, modelsDailyTimeline) {
     renderModelsSummaryCards(breakdown, codexUsage);
@@ -4989,28 +4990,81 @@ function renderTaskDurationTimeline(data) {
     const canvas = document.getElementById('canvas-task-duration');
     const status = document.getElementById('task-duration-status');
     const details = document.getElementById('task-duration-details');
-    if (!canvas || !status || !details) return;
+    const legend = document.getElementById('task-duration-legend');
+    const body = document.getElementById('task-duration-recent-body');
+    if (!canvas || !status || !details || !legend || !body) return;
     const english = window.UsageI18n?.language === 'en';
     const days = Number(currentTaskDurationRange);
     const windowDays = Number(currentTaskDurationWindow);
-    const points = (data?.windows?.[String(windowDays)]?.points || []).slice(-days);
+    const dates = (data?.dates || []).slice(-days);
+    const rows = (data?.windows?.[String(windowDays)]?.models || []).map(row => ({
+        ...row,
+        points: (row.points || []).slice(-days),
+        rangeTaskCount: (row.daily_task_counts || []).slice(-days)
+            .reduce((sum, count) => sum + Number(count || 0), 0),
+    })).filter(row => row.points.some(point => point.task_count > 0));
     const c = CanvasCharts.initCanvas(canvas);
     if (!c) return;
     const { ctx, width, height } = c;
     ctx.clearRect(0, 0, width, height);
-    const valid = points.filter(point => Number.isFinite(point.mean_minutes) && point.task_count > 0);
-    if (!valid.length) {
+    canvas.onmousemove = null;
+    canvas.onmouseleave = null;
+    if (!rows.length) {
         status.textContent = english
-            ? 'No accepted Codex tasks with completed-turn timestamps in this range.'
-            : 'Chưa có nhiệm vụ Codex đã hoàn tất với mốc thời gian xử lý hợp lệ trong phạm vi này.';
+            ? 'No accepted, single-model Codex tasks have valid work intervals in this range.'
+            : 'Chưa có nhiệm vụ Codex một model đã đạt yêu cầu với khoảng xử lý hợp lệ trong phạm vi này.';
+        legend.innerHTML = '';
+        body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1.1rem;">${english ? 'No attributable task-duration samples.' : 'Chưa có mẫu thời gian nhiệm vụ quy được cho một model.'}</td></tr>`;
         details.textContent = '';
         return;
     }
 
+    legend.innerHTML = [
+        `<button type="button" data-duration-model="all" class="${currentTaskDurationSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">${english ? 'All' : 'Tất cả'} (${rows.length})</button>`,
+        ...rows.map(row => {
+            const color = colorForModelKey(row.model_key);
+            const active = currentTaskDurationSelection !== null && currentTaskDurationSelection.has(row.model_key);
+            const labelColor = currentTaskDurationSelection === null || active ? color : '#cbd5e1';
+            return `<button type="button" data-duration-model="${escapeHtml(row.model_key)}" class="${active ? 'active' : ''}" style="--quota-color:${color};color:${labelColor}"><span class="quota-timeline-swatch"></span>${escapeHtml(row.model_key)} (${formatNumber(row.rangeTaskCount)})</button>`;
+        }),
+    ].join('');
+    legend.querySelectorAll('button[data-duration-model]').forEach(button => {
+        button.addEventListener('click', () => toggleTaskDurationModel(button.dataset.durationModel));
+    });
+    const selectedRows = currentTaskDurationSelection === null
+        ? rows : rows.filter(row => currentTaskDurationSelection.has(row.model_key));
+    const measuredInRange = rows.reduce((sum, row) => sum + row.rangeTaskCount, 0);
+    status.textContent = english
+        ? `${days}-day range · ${windowDays}-day rolling mean · ${rows.length} models · ${formatNumber(measuredInRange)} accepted single-model tasks · ${selectedRows.length} ${selectedRows.length === 1 ? 'model' : 'models'} shown.`
+        : `Phạm vi ${days} ngày · trung bình trượt ${windowDays} ngày · ${rows.length} model · ${formatNumber(measuredInRange)} nhiệm vụ một model đã đạt yêu cầu · đang hiện ${selectedRows.length} model.`;
+    details.textContent = english
+        ? `Only completed, single-model tasks are attributed. In retained history, ${formatNumber(Number(data.mixed_excluded_count || 0))} mixed-model and ${formatNumber(Number(data.repair_excluded_count || 0))} separately linked repair missions are excluded; ${formatNumber(Number(data.missing_duration_count || 0))} eligible tasks have missing or invalid work intervals. Waiting between turns is excluded. Inferred acceptances are included, and task type or difficulty is not normalized.`
+        : `Chỉ quy thời gian cho nhiệm vụ hoàn tất bằng một model. Trong lịch sử giữ lại, loại ${formatNumber(Number(data.mixed_excluded_count || 0))} nhiệm vụ trộn model và ${formatNumber(Number(data.repair_excluded_count || 0))} nhiệm vụ sửa được nối riêng; ${formatNumber(Number(data.missing_duration_count || 0))} nhiệm vụ đủ điều kiện có khoảng xử lý thiếu hoặc không hợp lệ. Bỏ khoảng chờ giữa các lượt. Vẫn gồm các ca đạt yêu cầu do máy suy luận; chưa chuẩn hóa theo loại và độ khó công việc.`;
+    body.innerHTML = selectedRows.length ? selectedRows.map(row => {
+        const latest = row.points[row.points.length - 1] || {};
+        const count = Number(latest.task_count || 0);
+        const color = colorForModelKey(row.model_key);
+        const countNote = count > 0 && count < 3
+            ? `<span class="task-duration-sparse"> · ${english ? 'few samples' : 'ít mẫu'}</span>` : '';
+        return `<tr>
+            <td style="font-weight:600;color:${color};">${escapeHtml(row.model_key)}</td>
+            <td class="num">${count ? formatTaskDuration(Number(latest.mean_minutes)) : '—'}</td>
+            <td class="num">${count ? formatTaskDuration(Number(latest.median_minutes)) : '—'}</td>
+            <td class="num">${formatNumber(count)}${countNote}</td>
+            <td class="num">${formatNumber(row.rangeTaskCount)}</td>
+            <td class="num">${formatNumber(Number(latest.reviewed_count || 0))} / ${formatNumber(count)}</td>
+            <td>${row.last_observed_at ? formatDate(row.last_observed_at) : '—'}</td>
+        </tr>`;
+    }).join('') : `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1.1rem;">${english ? 'Select one or more models above.' : 'Chọn một hoặc nhiều model ở phía trên.'}</td></tr>`;
+    if (!selectedRows.length) return;
+
     const pad = { top: 22, right: 24, bottom: 42, left: 66 };
     const chartW = Math.max(1, width - pad.left - pad.right);
     const chartH = Math.max(1, height - pad.top - pad.bottom);
-    const maxValue = Math.max(...valid.map(point => point.mean_minutes)) * 1.15 || 1;
+    const validValues = selectedRows.flatMap(row => row.points
+        .filter(point => point.task_count > 0 && Number.isFinite(point.mean_minutes))
+        .map(point => point.mean_minutes));
+    const maxValue = Math.max(1, ...validValues) * 1.15;
     ctx.font = '500 10px "JetBrains Mono", monospace';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
@@ -5025,48 +5079,70 @@ function renderTaskDurationTimeline(data) {
         ctx.fillStyle = '#94a3b8';
         ctx.fillText(formatTaskDuration(value), pad.left - 8, y);
     }
-    const xFor = index => pad.left + (points.length <= 1 ? chartW / 2 : index * chartW / (points.length - 1));
+    const xFor = index => pad.left + (dates.length <= 1 ? chartW / 2 : index * chartW / (dates.length - 1));
     const yFor = minutes => pad.top + chartH * (1 - minutes / maxValue);
-    let drawing = false;
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = THEME.cyan;
-    ctx.beginPath();
-    points.forEach((point, index) => {
-        if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) {
-            drawing = false;
-            return;
-        }
-        const x = xFor(index), y = yFor(point.mean_minutes);
-        if (drawing) ctx.lineTo(x, y);
-        else ctx.moveTo(x, y);
-        drawing = true;
-    });
-    ctx.stroke();
-    points.forEach((point, index) => {
-        if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) return;
+    selectedRows.forEach(row => {
+        const color = colorForModelKey(row.model_key);
+        let drawing = false;
+        ctx.lineWidth = 2.3;
+        ctx.strokeStyle = color;
         ctx.beginPath();
-        ctx.arc(xFor(index), yFor(point.mean_minutes), 2.8, 0, Math.PI * 2);
-        ctx.fillStyle = THEME.cyan;
-        ctx.fill();
+        row.points.forEach((point, index) => {
+            if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) {
+                drawing = false;
+                return;
+            }
+            const x = xFor(index), y = yFor(point.mean_minutes);
+            if (drawing) ctx.lineTo(x, y);
+            else ctx.moveTo(x, y);
+            drawing = true;
+        });
+        ctx.stroke();
+        row.points.forEach((point, index) => {
+            if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) return;
+            ctx.beginPath();
+            ctx.arc(xFor(index), yFor(point.mean_minutes), 2.5, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        });
     });
-    const labelStep = points.length > 120 ? 30 : (points.length > 60 ? 14 : 7);
+    const labelStep = dates.length > 120 ? 30 : (dates.length > 60 ? 14 : 7);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    points.forEach((point, index) => {
-        if (index % labelStep !== 0 && index !== points.length - 1) return;
+    dates.forEach((date, index) => {
+        if (index % labelStep !== 0 && index !== dates.length - 1) return;
         ctx.fillStyle = '#94a3b8';
-        ctx.fillText(quotaTimelineDateLabel(point.date), xFor(index), pad.top + chartH + 9);
+        ctx.fillText(quotaTimelineDateLabel(date), xFor(index), pad.top + chartH + 9);
     });
-    const latest = valid[valid.length - 1];
-    status.textContent = english
-        ? `${days}-day range · ${windowDays}-day rolling mean · ${formatNumber(Number(data.task_count || 0))} measured accepted tasks in retained history · ${formatNumber(Number(data.missing_duration_count || 0))} accepted tasks lack completed-turn times.`
-        : `Phạm vi ${days} ngày · trung bình trượt ${windowDays} ngày · ${formatNumber(Number(data.task_count || 0))} nhiệm vụ đã đạt yêu cầu có thời gian đo được trong lịch sử giữ lại · ${formatNumber(Number(data.missing_duration_count || 0))} nhiệm vụ thiếu mốc hoàn tất.`;
-    details.textContent = english
-        ? `Latest measured window (${quotaTimelineDateLabel(latest.date)}): mean ${formatTaskDuration(latest.mean_minutes)} · median ${formatTaskDuration(latest.median_minutes)} · ${formatNumber(latest.task_count)} tasks (${formatNumber(latest.reviewed_count)} manually reviewed). The mean covers observed completed-turn intervals, merges overlapping work, and excludes gaps between turns; inferred acceptances may still be included.`
-        : `Cửa sổ đo gần nhất (${quotaTimelineDateLabel(latest.date)}): trung bình ${formatTaskDuration(latest.mean_minutes)} · trung vị ${formatTaskDuration(latest.median_minutes)} · ${formatNumber(latest.task_count)} nhiệm vụ (${formatNumber(latest.reviewed_count)} đã duyệt thủ công). Trung bình tính theo các lượt xử lý có mốc hoàn tất, gộp khoảng chạy chồng lấp và bỏ khoảng chờ giữa các lượt; vẫn có thể gồm nhiệm vụ đạt yêu cầu do máy suy luận.`;
-    canvas.title = english
-        ? `Latest mean: ${formatTaskDuration(latest.mean_minutes)} across ${latest.task_count} tasks`
-        : `Trung bình gần nhất: ${formatTaskDuration(latest.mean_minutes)} trên ${latest.task_count} nhiệm vụ`;
+    canvas.onmousemove = event => {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !dates.length) return;
+        const x = (event.clientX - rect.left) * width / rect.width;
+        const index = Math.max(0, Math.min(dates.length - 1,
+            Math.round((x - pad.left) * (dates.length - 1) / chartW)));
+        const lines = selectedRows.map(row => {
+            const point = row.points[index];
+            return point?.task_count > 0
+                ? `${row.model_key}: ${formatTaskDuration(point.mean_minutes)} (n=${point.task_count})`
+                : null;
+        }).filter(Boolean);
+        canvas.title = `${dates[index]}${lines.length ? '\n' + lines.join('\n') : ''}`;
+    };
+    canvas.onmouseleave = () => { canvas.title = ''; };
+}
+
+function toggleTaskDurationModel(modelKey) {
+    if (modelKey === 'all') {
+        currentTaskDurationSelection = null;
+    } else if (currentTaskDurationSelection === null) {
+        currentTaskDurationSelection = new Set([modelKey]);
+    } else if (currentTaskDurationSelection.has(modelKey)) {
+        currentTaskDurationSelection.delete(modelKey);
+    } else {
+        currentTaskDurationSelection.add(modelKey);
+    }
+    saveUiPreferences({ taskDurationSelection: serializeModelSelection(currentTaskDurationSelection) });
+    renderTaskDurationTimeline(cachedCodexTaskOutcomes?.duration_timeline);
 }
 
 function initTaskDurationControls() {

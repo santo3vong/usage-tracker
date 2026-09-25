@@ -51,7 +51,7 @@ Các chỉ số chưa có dữ liệu sẽ hiển thị unknown, tránh việc g
 
 ![Biểu đồ token và chi phí theo model](docs/screenshots/token-cost-trend-2026-09-25.png)
 
-Biểu đồ đường **Thời Gian Trung Bình Hoàn Thành Nhiệm Vụ** bổ sung thời gian xử lý thực đo của các lượt Codex đã hoàn tất, với phạm vi 30/90/180 ngày và cửa sổ trung bình 7/14/30 ngày. Khoảng chờ giữa các lần sửa được loại khỏi thời gian xử lý; các nhiệm vụ thiếu mốc hoàn tất không được gán thời lượng bằng 0.
+Biểu đồ đường **Thời Gian Hoàn Thành Trung Bình Theo Model** tách từng `model + effort`, cho chọn nhiều model và có bảng so sánh trung bình, trung vị, số mẫu gần nhất. Biểu đồ có phạm vi 30/90/180 ngày và cửa sổ trượt 7/14/30 ngày. Chỉ quy thời gian cho nhiệm vụ đã đạt yêu cầu do một model xử lý từ đầu đến cuối với đầy đủ mốc thời gian; loại các nhiệm vụ trộn model và nhiệm vụ sửa được nối riêng. Khoảng chờ giữa các lượt không được cộng. Các giá trị này chưa chuẩn hóa theo loại và độ khó công việc; số mẫu đã duyệt thủ công được hiển thị riêng để bạn cân nhắc độ tin cậy.
 
 ## Tính năng: usage tức thời/ usage trung bình
 
