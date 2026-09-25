@@ -199,6 +199,10 @@ Sau đó mở:
 http://127.0.0.1:5051/
 ```
 
+### Vì sao lần tải đầu có thể lâu?
+
+**Nếu trang mở nhưng số liệu còn đang tải:** server đang quét log Codex/Gemini và tính lại các biểu đồ, ma trận task. Với lịch sử lớn, lượt tải đầu hoặc lần làm mới có thể mất vài chục giây; trong phép đo trên máy của tác giả ngày 25/09/2026 (gần 40.000 sự kiện Codex), `/api/data` mất khoảng 24 giây. Đây là thời gian xử lý cục bộ, không đồng nghĩa trang bị treo. Hãy chờ dòng “Cập nhật lần cuối” đổi thành giờ cụ thể; nếu API báo lỗi hoặc không cập nhật, xem log trong `runtime/`. Tốc độ thực tế phụ thuộc lượng lịch sử và máy chạy. Dashboard live chỉ tải `data.js` dự phòng khi API không dùng được; API mặc định không gửi hai danh sách sự kiện thô lớn, nhưng vẫn giữ dữ liệu biểu đồ và task. Nếu cần xuất toàn bộ bằng API, dùng `/api/data?include_raw=1`.
+
 Dừng hoặc restart server:
 
 ```powershell

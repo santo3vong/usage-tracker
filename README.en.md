@@ -179,6 +179,10 @@ Then open:
 http://127.0.0.1:5051/
 ```
 
+### Why can the first load take time?
+
+**If the page opens while its numbers are still loading:** the server is scanning local Codex/Gemini logs and rebuilding charts and task matrices. With a large history, the first load or a refresh can take tens of seconds; on the maintainer's machine on September 25, 2026 (nearly 40,000 Codex events), `/api/data` took about 24 seconds. This is local processing, not by itself a frozen page. Wait for “Last updated” to show a time; if the API errors or never updates, check the logs under `runtime/`. Actual time depends on history size and hardware. The live dashboard loads the offline `data.js` only when the API is unavailable. By default the API omits two large raw event lists while retaining chart and task results; callers needing the full API export can use `/api/data?include_raw=1`.
+
 Stop or restart the server with:
 
 ```powershell

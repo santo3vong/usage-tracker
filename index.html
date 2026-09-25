@@ -208,7 +208,7 @@
         <div class="status-bar">
             <div class="status-item">
                 <span class="status-label">Cập nhật lần cuối:</span>
-                <span class="status-value" id="last-updated-time">Đang tải...</span>
+                <span class="status-value" id="last-updated-time">Đang quét lịch sử cục bộ, vui lòng chờ...</span>
             </div>
             <div class="status-item">
                 <span class="status-label">Nguồn dữ liệu:</span>
@@ -1906,10 +1906,9 @@
         </footer>
     </div>
 
-    <!-- Fallback data for offline/file-protocol mode -->
-    <script src="data.js"></script>
-    <script src="i18n.js?v=20260925-dashboard-5"></script>
-    <script src="table_sort.js?v=20260925-dashboard-5"></script>
-    <script src="app.js?v=20260925-dashboard-5"></script>
+    <!-- Offline data.js is loaded only if the live API cannot be reached. -->
+    <script src="i18n.js?v=20260925-dashboard-6"></script>
+    <script src="table_sort.js?v=20260925-dashboard-6"></script>
+    <script src="app.js?v=20260925-dashboard-6"></script>
 </body>
 </html>

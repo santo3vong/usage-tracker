@@ -927,6 +927,28 @@ class CanvasCharts {
 }
 
 // ---- Data Fetching & Syncing ----
+let offlineDataScriptPromise = null;
+
+function loadOfflineDataScript() {
+    if (typeof USAGE_DATA !== 'undefined') return Promise.resolve(USAGE_DATA);
+    if (!offlineDataScriptPromise) {
+        offlineDataScriptPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'data.js';
+            script.onload = () => {
+                if (typeof USAGE_DATA !== 'undefined') resolve(USAGE_DATA);
+                else reject(new Error('Offline data.js did not define USAGE_DATA.'));
+            };
+            script.onerror = () => reject(new Error('Offline data.js is unavailable.'));
+            document.head.appendChild(script);
+        }).catch(error => {
+            offlineDataScriptPromise = null;
+            throw error;
+        });
+    }
+    return offlineDataScriptPromise;
+}
+
 function buildDataApiUrl() {
     const params = new URLSearchParams();
     if (currentModelTimelineRange === 'custom' && currentModelTimelineStart && currentModelTimelineEnd) {
@@ -960,11 +982,15 @@ async function doFetchData(isManual = false) {
             console.log('Direct API not reachable, attempting fallback data...');
         }
 
-        // 2. Fallback to static USAGE_DATA from data.js if running standalone
-        if (!data && typeof USAGE_DATA !== 'undefined') {
-            data = USAGE_DATA;
-            const badge = document.getElementById('data-source-badge');
-            if (badge) badge.textContent = 'Static File (data.js)';
+        // 2. Load the large offline snapshot only when live data is unavailable.
+        if (!data) {
+            try {
+                data = await loadOfflineDataScript();
+                const badge = document.getElementById('data-source-badge');
+                if (badge) badge.textContent = 'Static File (data.js)';
+            } catch (error) {
+                console.warn('Offline data is unavailable:', error);
+            }
         }
 
         if (!data || !data.summary) {

@@ -300,6 +300,39 @@ def _write_data_js(data):
     _atomic_write_text(os.path.join(BASE_DIR, 'data.js'), payload)
 
 
+def dashboard_payload(data, include_raw=False):
+    """Omit server-only scan evidence from the dashboard's default response.
+
+    The derived charts and task outcomes have already used these events. Keep
+    the full ledger available to explicit API callers with include_raw=1.
+    Neither the source scan result nor the on-disk cache is mutated.
+    """
+    if include_raw or not isinstance(data, dict):
+        return data
+    summary = data.get('summary')
+    if not isinstance(summary, dict):
+        return data
+    codex_usage = summary.get('codex_usage')
+    if not isinstance(codex_usage, dict):
+        return data
+    if not isinstance(codex_usage.get('automatic_model_usage'), dict):
+        return data
+    trimmed_summary = dict(summary, codex_usage=dashboard_codex_usage(codex_usage))
+    return dict(data, summary=trimmed_summary)
+
+
+def dashboard_codex_usage(data, include_raw=False):
+    if include_raw or not isinstance(data, dict):
+        return data
+    auto = data.get('automatic_model_usage')
+    if not isinstance(auto, dict):
+        return data
+    return dict(data, automatic_model_usage={
+        key: value for key, value in auto.items()
+        if key not in ('recent_events', 'quota_observations')
+    })
+
+
 _LIVE_STATIC_SNAPSHOT_WRITTEN = False
 
 
@@ -7273,24 +7306,26 @@ def _codex_repair_topic_tokens(text):
     }
 
 
-def _codex_repair_link_candidates(mission, prior_missions, limit=8):
-    """Rank plausible earlier objectives without silently forcing a weak link."""
-    repair_text = ' '.join([
+def _codex_mission_repair_topic_tokens(mission):
+    text = ' '.join([
         str(mission.get('title') or ''),
         *[str(turn.get('prompt') or '') for turn in mission.get('turns') or [] if isinstance(turn, dict)],
     ])
-    repair_tokens = _codex_repair_topic_tokens(repair_text)
+    return _codex_repair_topic_tokens(text)
+
+
+def _codex_repair_link_candidates(mission, prior_missions, limit=8, topic_tokens_cache=None):
+    """Rank plausible earlier objectives without silently forcing a weak link."""
+    repair_tokens = (topic_tokens_cache[id(mission)] if topic_tokens_cache is not None
+                     else _codex_mission_repair_topic_tokens(mission))
     repair_categories = set(mission.get('categories') or [mission.get('category') or 'other'])
     repair_thread = str(mission.get('thread_id') or '')
     repair_dt = _parse_iso_utc(mission.get('start_at'))
     referenced_threads = set(mission.get('referenced_thread_ids') or [])
     ranked = []
     for recency, candidate in enumerate(reversed(prior_missions)):
-        candidate_text = ' '.join([
-            str(candidate.get('title') or ''),
-            *[str(turn.get('prompt') or '') for turn in candidate.get('turns') or [] if isinstance(turn, dict)],
-        ])
-        candidate_tokens = _codex_repair_topic_tokens(candidate_text)
+        candidate_tokens = (topic_tokens_cache[id(candidate)] if topic_tokens_cache is not None
+                            else _codex_mission_repair_topic_tokens(candidate))
         shared = repair_tokens & candidate_tokens
         shared_numeric = {token for token in shared if any(char.isdigit() for char in token)}
         same_thread = bool(repair_thread and repair_thread == str(candidate.get('thread_id') or ''))
@@ -7514,6 +7549,13 @@ def _codex_apply_repair_penalties(missions):
         missions,
         key=lambda item: (str(item.get('start_at') or ''), str(item.get('id') or '')),
     )
+    # Candidate ranking compares each mission with every earlier mission.
+    # Tokenizing the same prompts for every pair made a normal dashboard scan
+    # spend most of its time repeating Unicode normalization.
+    topic_tokens_cache = {
+        id(mission): _codex_mission_repair_topic_tokens(mission)
+        for mission in ordered
+    }
     by_anchor = {
         str(mission.get('anchor_turn_id') or ''): mission
         for mission in ordered if mission.get('anchor_turn_id')
@@ -7536,7 +7578,9 @@ def _codex_apply_repair_penalties(missions):
         repair_start = None
         mode = str(mission.get('repair_link_mode') or 'auto')
         override_anchor = str(mission.get('repair_of_anchor_turn_id_override') or '')
-        candidates = _codex_repair_link_candidates(mission, ordered[:index])
+        candidates = _codex_repair_link_candidates(
+            mission, ordered[:index], topic_tokens_cache=topic_tokens_cache,
+        )
         mission['repair_link_candidates'] = candidates
 
         if mode == 'manual' and override_anchor:
@@ -13493,7 +13537,7 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.end_headers()
-                resp = json.dumps({'status': 'ok', 'data': codex_data}, ensure_ascii=False).encode('utf-8')
+                resp = json.dumps({'status': 'ok', 'data': dashboard_codex_usage(codex_data)}, ensure_ascii=False).encode('utf-8')
                 self.wfile.write(resp)
                 return
             except Exception as e:
@@ -13511,6 +13555,7 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
         if parsed.path in ('/api/data', '/api/refresh'):
             query = urllib.parse.parse_qs(parsed.query)
+            include_raw = query.get('include_raw', ['0'])[0] == '1'
             timeline_start = query.get('model_timeline_start', [None])[0]
             timeline_end = query.get('model_timeline_end', [None])[0]
             timeline_days_raw = query.get('model_timeline_days', ['7'])[0]
@@ -13521,8 +13566,10 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     model_timeline_start=timeline_start,
                     model_timeline_end=timeline_end,
                 )
+                lean_data = dashboard_payload(data)
+                dashboard_data = data if include_raw else lean_data
                 try:
-                    _write_live_static_snapshot_once(data)
+                    _write_live_static_snapshot_once(lean_data)
                 except OSError:
                     pass  # The live API still works if the optional file export fails.
             except (TypeError, ValueError) as exc:
@@ -13537,7 +13584,7 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(response_bytes)
                 return
-            response_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
+            response_bytes = json.dumps(dashboard_data, ensure_ascii=False).encode('utf-8')
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -13548,10 +13595,14 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if parsed.path == '/api/codex-usage':
+            query = urllib.parse.parse_qs(parsed.query)
             codex_data = load_codex_usage()
             codex_data['rate_limits'] = get_codex_rate_limits()
             codex_data['automatic_model_usage'] = scan_codex_model_usage()
-            response_bytes = json.dumps(codex_data, ensure_ascii=False).encode('utf-8')
+            response_bytes = json.dumps(
+                dashboard_codex_usage(codex_data, include_raw=query.get('include_raw', ['0'])[0] == '1'),
+                ensure_ascii=False,
+            ).encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(response_bytes)))

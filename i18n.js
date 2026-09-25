@@ -12,6 +12,7 @@
         ['Language / Ngôn ngữ:', 'Language:'],
         ['Tiếng Việt', 'Vietnamese'],
         ['Đang tải...', 'Loading...'],
+        ['Đang quét lịch sử cục bộ, vui lòng chờ...', 'Scanning local usage history; please wait...'],
         ['Đang tải…', 'Loading…'],
         ['Đang xây dựng ma trận…', 'Building matrix…'],
         ['Đang đọc lịch sử Codex…', 'Reading Codex history…'],
