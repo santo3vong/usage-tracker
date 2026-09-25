@@ -4,6 +4,17 @@ All notable public changes to Usage Tracker will be documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-25
+
+### Added
+
+- Clickable ascending/descending sort controls on dashboard table headings, with hover and keyboard cues. Per-table sort selections persist across reloads, refreshes, and filter changes; action columns remain unchanged and summary footers stay below the sorted data.
+- Typed sorting for token counts, prices, percentages, timestamps, task durations, confidence, and quota-matrix ratios. Mixed-metric cells use an explicit primary value, and unmeasured values sort last.
+
+### Fixed
+
+- Keep the investigation and model-leaderboard sort menus synchronized with column sorting, and restore their existing presets when selected.
+
 ## [0.4.1] - 2026-09-25
 
 ### Fixed

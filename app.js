@@ -1171,7 +1171,7 @@ function renderTimeSeriesAnalytics(tsData) {
                         <td><span class="badge-tag" style="background:rgba(6,182,212,0.15);color:var(--cyan-400);font-weight:600;">${escapeHtml(s.provider || 'Google Gemini')}</span></td>
                         <td style="font-family:'JetBrains Mono';font-size:0.8rem;">${escapeHtml(s.bucket || 'Gemini 5H')}</td>
                         <td><span class="badge-tag ${badgeType}" style="font-weight:700;">${tagText} (${s.change_pct || '0%'})</span></td>
-                        <td style="font-family:'JetBrains Mono';font-weight:600;">${formatNumber(s.old_capacity)} → <strong style="color:var(--cyan-400);">${formatNumber(s.new_capacity)}</strong></td>
+                        <td data-sort-value="${Number(s.new_capacity) || 0}" style="font-family:'JetBrains Mono';font-weight:600;">${formatNumber(s.old_capacity)} → <strong style="color:var(--cyan-400);">${formatNumber(s.new_capacity)}</strong></td>
                         <td style="font-size:0.78rem;color:var(--text-secondary);max-width:280px;">${escapeHtml(s.note || 'Bằng chứng thực nghiệm ghi nhận từ hệ thống.')}</td>
                     </tr>
                 `;
@@ -2176,18 +2176,18 @@ function renderLeaderboardTable(leaderboard) {
 
         return `
             <tr>
-                <td><span class="rank-badge ${rankClass}">${rankLabel}</span></td>
+                <td data-sort-value="${item.rank || ''}"><span class="rank-badge ${rankClass}">${rankLabel}</span></td>
                 <td>
                     <div class="leaderboard-model-name">${escapeHtml(item.display_name || item.model_name)} <span class="provider-badge ${provClass}">${escapeHtml(item.provider)}</span></div>
                     <div class="leaderboard-status-row"><span class="aa-status ${statusClass}">${statusText}</span>${selectableBadge}${priorBadge}</div>
                     <div class="leaderboard-cell-sub">${sourceLine}</div>
                 </td>
-                <td class="num"><strong class="leaderboard-iq">${leaderboardMetric(item.intelligence_index)}</strong></td>
-                <td class="num"><strong class="leaderboard-speed">${leaderboardMetric(item.speed_tps, ' t/s')}</strong></td>
-                <td class="num">${costTask}</td>
-                <td class="num leaderboard-price-cell">${formatLeaderboardPrice(item)}</td>
-                <td class="num">${formatLocalQuota(item)}</td>
-                <td class="num"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${escapeHtml(localSessions)}</div></td>
+                <td class="num" data-sort-value="${hasLeaderboardMetric(item.intelligence_index) ? Number(item.intelligence_index) : ''}"><strong class="leaderboard-iq">${leaderboardMetric(item.intelligence_index)}</strong></td>
+                <td class="num" data-sort-value="${hasLeaderboardMetric(item.speed_tps) ? Number(item.speed_tps) : ''}"><strong class="leaderboard-speed">${leaderboardMetric(item.speed_tps, ' t/s')}</strong></td>
+                <td class="num" data-sort-value="${hasLeaderboardMetric(item.cost_per_task) ? Number(item.cost_per_task) : ''}">${costTask}</td>
+                <td class="num leaderboard-price-cell" data-sort-value="${hasLeaderboardMetric(item.price_in_1m) ? Number(item.price_in_1m) : ''}">${formatLeaderboardPrice(item)}</td>
+                <td class="num" data-sort-value="${hasLeaderboardMetric(item.local_estimated_quota_pct_per_task) && Number(item.local_estimated_quota_pct_per_task) > 0 ? Number(item.local_estimated_quota_pct_per_task) : ''}">${formatLocalQuota(item)}</td>
+                <td class="num" data-sort-value="${Number(item.local_total_tokens || 0)}"><strong class="leaderboard-local-tokens">${formatNumber(item.local_total_tokens)}</strong><div class="leaderboard-cell-sub">${localCost} all-time • ${escapeHtml(localSessions)}</div></td>
                 <td class="leaderboard-decision-cell"><strong>${escapeHtml(decisionLabel)}</strong><div>${escapeHtml(decisionNote)}</div></td>
             </tr>
         `;
@@ -2245,7 +2245,7 @@ function renderLeaderboardRepairCapabilities() {
                 <td><strong>${escapeHtml(leaderboardDisplayName(row.from_model))}</strong></td>
                 <td><strong>${escapeHtml(leaderboardDisplayName(row.to_model))}</strong></td>
                 <td>${escapeHtml(categories)}</td>
-                <td class="num"><strong>${accepted}/${attempts}</strong><div class="leaderboard-cell-sub">${Number.isFinite(rate) ? (rate * 100).toFixed(0) + '%' : '—'}</div></td>
+                <td class="num" data-sort-value="${Number.isFinite(rate) ? rate : ''}"><strong>${accepted}/${attempts}</strong><div class="leaderboard-cell-sub">${Number.isFinite(rate) ? (rate * 100).toFixed(0) + '%' : '—'}</div></td>
                 <td class="num">${hasQuota && Number.isFinite(quota) ? `<strong>${quota.toFixed(2)}% 5h</strong><div class="leaderboard-cell-sub">n=${row.quota_sample_count || 0}</div>` : '<span class="leaderboard-na">Chưa đo được</span>'}</td>
                 <td><strong>${escapeHtml(leaderboardText(`Đã sửa thành công · tin cậy ${confidence}`))}</strong><div class="leaderboard-cell-sub"><span>${escapeHtml(prior)}</span><br><span>${escapeHtml(leaderboardText('AA chỉ là tín hiệu bổ trợ.'))}</span></div></td>
             </tr>
@@ -3407,7 +3407,7 @@ async function deleteAccount(targetEmail) {
 let modelsSortKey = savedChoice('modelsSortKey', [
     'model_id', 'platform', 'source_label', 'today_tokens', 'weekly_tokens',
     'total_tokens', 'input_tokens', 'output_tokens', 'thinking_tokens',
-    'weekly_quota_pct_used', 'sessions', 'responses',
+    'avg_tokens_per_response', 'weekly_quota_pct_used', 'sessions', 'responses',
 ], 'total_tokens');
 let modelsSortAsc = uiPreferences.modelsSortAsc === true;
 
@@ -4370,7 +4370,15 @@ function renderModelsTable(breakdown) {
 
     // Sort
     const sorted = [...breakdown].sort((a, b) => {
-        let va = a[modelsSortKey], vb = b[modelsSortKey];
+        const sortValue = model => modelsSortKey === 'avg_tokens_per_response'
+            ? (Number(model.responses) > 0
+                ? (Number(model.input_tokens || 0) + Number(model.output_tokens || 0)
+                    + Number(model.thinking_tokens || 0)) / Number(model.responses)
+                : null)
+            : model[modelsSortKey];
+        let va = sortValue(a), vb = sortValue(b);
+        if (va === null || va === undefined) return vb === null || vb === undefined ? 0 : 1;
+        if (vb === null || vb === undefined) return -1;
         if (typeof va === 'string') va = va.toLowerCase();
         if (typeof vb === 'string') vb = vb.toLowerCase();
         if (va < vb) return modelsSortAsc ? -1 : 1;
@@ -4381,9 +4389,11 @@ function renderModelsTable(breakdown) {
     // Update sort indicators
     document.querySelectorAll('.models-breakdown-table th.sortable').forEach(th => {
         th.classList.remove('sort-asc', 'sort-desc');
-        if (th.dataset.sort === modelsSortKey) {
+        const active = th.dataset.sort === modelsSortKey;
+        if (active) {
             th.classList.add(modelsSortAsc ? 'sort-asc' : 'sort-desc');
         }
+        th.setAttribute('aria-sort', active ? (modelsSortAsc ? 'ascending' : 'descending') : 'none');
     });
 
     const platformBadge = (platform) => {
@@ -4713,25 +4723,25 @@ function renderCodexTaskOutcomeMatrix(outcomes = cachedCodexTaskOutcomes) {
         return;
     }
 
-    head.innerHTML = `<tr><th>Loại công việc</th>${matrix.models.map(model => `
-        <th class="task-model-heading">${escapeHtml(model)}${model === matrix.baseline_model ? '<span class="task-cell-meta">Mốc Sol High</span>' : ''}</th>
+    head.innerHTML = `<tr><th data-column-key="task-type">Loại công việc</th>${matrix.models.map(model => `
+        <th class="task-model-heading" data-column-key="${escapeHtml(model)}" data-sort-type="number">${escapeHtml(model)}${model === matrix.baseline_model ? '<span class="task-cell-meta">Mốc Sol High</span>' : ''}</th>
     `).join('')}</tr>`;
 
     body.innerHTML = (matrix.rows || []).map(row => {
         const cells = matrix.models.map(model => {
             const cell = row.cells?.[model] || { sample_status: 'no_data', sample_count: 0 };
             if (cell.sample_status === 'no_data') {
-                return '<td class="task-matrix-cell is-missing">Chưa có dữ liệu</td>';
+                return '<td class="task-matrix-cell is-missing" data-sort-value="">Chưa có dữ liệu</td>';
             }
             const quotaStatus = String(cell.quota_sample_status || 'no_data');
             if (quotaStatus === 'no_data') {
-                return `<td class="task-matrix-cell is-sparse">Chưa đo được hạn mức 5h<span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} token tham khảo</span></td>`;
+                return `<td class="task-matrix-cell is-sparse" data-sort-value="">Chưa đo được hạn mức 5h<span class="task-cell-meta">n=${Number(cell.sample_count || 0)} · ${formatNumber(Number(cell.median_total_tokens || 0))} token tham khảo</span></td>`;
             }
             if (quotaStatus === 'insufficient') {
-                return `<td class="task-matrix-cell is-sparse">Chưa đủ mẫu hạn mức (n=${Number(cell.quota_sample_count || 0)})<span class="task-cell-meta">${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
+                return `<td class="task-matrix-cell is-sparse" data-sort-value="">Chưa đủ mẫu hạn mức (n=${Number(cell.quota_sample_count || 0)})<span class="task-cell-meta">${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · ${formatNumber(Number(cell.median_total_tokens || 0))} token</span></td>`;
             }
             if (quotaStatus === 'no_baseline') {
-                return `<td class="task-matrix-cell is-sparse">Chưa đủ mốc hạn mức Sol High<span class="task-cell-meta">Model này: ${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · n=${Number(cell.quota_sample_count || 0)}</span></td>`;
+                return `<td class="task-matrix-cell is-sparse" data-sort-value="">Chưa đủ mốc hạn mức Sol High<span class="task-cell-meta">Model này: ${Number(cell.median_quota_pct_5h || 0).toFixed(2)}% 5h · n=${Number(cell.quota_sample_count || 0)}</span></td>`;
             }
             const ratio = cell.relative_quota_vs_sol_high == null ? null : Number(cell.relative_quota_vs_sol_high);
             const estimated = quotaStatus === 'estimated' || cell.quota_comparison_estimated === true;
@@ -4777,7 +4787,7 @@ function renderCodexTaskOutcomeMatrix(outcomes = cachedCodexTaskOutcomes) {
             const repairPenaltyQuotaText = Number.isFinite(repairPenaltyQuota) && repairPenaltyQuota > 0
                 ? `<span class="task-cell-meta">Hạn mức gốc ${Number.isFinite(rawQuota) ? rawQuota.toFixed(2) : '0.00'}% + phạt ${repairPenaltyQuota.toFixed(2)}%</span>`
                 : '';
-            return `<td class="task-matrix-cell ${cellClass}">
+            return `<td class="task-matrix-cell ${cellClass}" data-sort-value="${Number.isFinite(ratio) ? ratio : ''}">
                 <span class="task-cell-ratio">${Number.isFinite(ratio) ? ratio.toFixed(2) + '×' : '—'}${estimated ? ' · ước lượng' : (sparseQuota ? ' · mẫu ít' : '')}</span>
                 <span class="task-cell-meta">${quotaText}</span>
                 <span class="task-cell-meta">${tokenText} · ${costText}</span>
@@ -4961,7 +4971,7 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
                 </td>
                 <td><div class="task-route ${mixed ? 'task-route-mixed' : ''}">${escapeHtml(mission.route_label || 'Không rõ model')}</div>${mission.has_delegated_work ? `<div class="task-mission-subline">Có ${Number(mission.delegated_turn_count || 0)} lượt subagent · ${formatNumber(Number(mission.delegated_tokens || 0))} token</div>` : ''}${repairHint}${chainHint}<label class="task-repair-link"><span>Nối lượt sửa với nhiệm vụ</span><select class="task-review-select" data-task-review="repair_of_anchor_turn_id" data-anchor="${anchor}">${taskOutcomeRepairOptions(mission)}</select></label></td>
                 <td class="num"><strong>${Number(mission.turn_count || 0)}</strong> / ${Number(mission.correction_turns || 0)}</td>
-                <td class="num">${usageValue}${penaltyHint}</td>
+                <td class="num" data-sort-value="${quotaKnown ? Number(mission.quota_pct_5h) : ''}">${usageValue}${penaltyHint}</td>
                 <td class="num">~${formatNumber(Number(mission.added_guidance_tokens_est || 0))}</td>
                 <td>${formatDate(mission.start_at)}</td>
                 <td><span class="task-confidence-pill ${confidence}">${confidence === 'high' ? 'Cao' : (confidence === 'medium' ? 'Vừa' : 'Thấp')}</span></td>
@@ -5393,12 +5403,16 @@ document.addEventListener('DOMContentLoaded', () => {
         applyFiltersAndSort();
     });
     document.getElementById('sort-select').addEventListener('change', event => {
+        if (event.target.value !== 'column') clearTableSortState(document.getElementById('conv-table'));
         saveUiPreferences({ investigationSort: event.target.value });
         applyFiltersAndSort();
     });
 
     ['leaderboard-sort-select', 'leaderboard-scope-select', 'leaderboard-family-select'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', event => {
+            if (id === 'leaderboard-sort-select' && event.target.value !== 'column') {
+                clearTableSortState(document.getElementById('leaderboard-table'));
+            }
             const keyById = {
                 'leaderboard-sort-select': 'leaderboardSort',
                 'leaderboard-scope-select': 'leaderboardScope',
@@ -5752,6 +5766,8 @@ function initTableDensityControls() {
 // 6. Shared table sizing and column resizing. Both settings persist per table.
 const TABLE_COLUMN_WIDTHS_STORAGE_PREFIX = 'usage-tracker:column-widths:v1:';
 const TABLE_VIEWPORT_SIZE_STORAGE_PREFIX = 'usage-tracker:table-size:v1:';
+const TABLE_SORT_STORAGE_PREFIX = 'usage-tracker:table-sort:v1:';
+const tableSortStates = new WeakMap();
 
 function getTableStableId(table, tableIndex) {
     return table.id || table.querySelector('tbody[id]')?.id || `table-${tableIndex}`;
@@ -5961,6 +5977,144 @@ function initTableSizeControls(tables = Array.from(document.querySelectorAll('ta
     });
 }
 
+function tableSortColumnKey(th, index) {
+    return th.dataset.columnKey ? `key:${th.dataset.columnKey}` : `index:${index}`;
+}
+
+function tableSortStorageKey(table, tableIndex) {
+    return `${TABLE_SORT_STORAGE_PREFIX}${getTableStableId(table, tableIndex)}`;
+}
+
+function getTableSortState(table, tableIndex) {
+    if (tableSortStates.has(table)) return tableSortStates.get(table);
+    let state = null;
+    try {
+        const saved = JSON.parse(localStorage.getItem(tableSortStorageKey(table, tableIndex)) || 'null');
+        if (saved && typeof saved.key === 'string' && ['asc', 'desc'].includes(saved.direction)) {
+            state = saved;
+        }
+    } catch (_) {}
+    tableSortStates.set(table, state);
+    return state;
+}
+
+function syncTableSortHeaders(table, state) {
+    const headers = Array.from(table.tHead?.querySelectorAll('th') || []);
+    headers.forEach((th, index) => {
+        const active = state?.key === tableSortColumnKey(th, index);
+        th.classList.toggle('sort-asc', active && state.direction === 'asc');
+        th.classList.toggle('sort-desc', active && state.direction === 'desc');
+        if (th.classList.contains('table-sortable')) {
+            th.setAttribute('aria-sort', active
+                ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+        }
+    });
+}
+
+function applyTableSort(table, tableIndex) {
+    if (table.classList.contains('models-breakdown-table')) return;
+    const state = getTableSortState(table, tableIndex);
+    syncTableSortHeaders(table, state);
+    if (!state || !table.tBodies.length) return;
+    const headers = Array.from(table.tHead?.querySelectorAll('th') || []);
+    const columnIndex = headers.findIndex((th, index) => tableSortColumnKey(th, index) === state.key);
+    if (columnIndex < 0) return;
+    const th = headers[columnIndex];
+    const type = window.UsageTableSort.inferType(th.textContent, th.classList.contains('num'), th.dataset.sortType);
+    const tbody = table.tBodies[0];
+    const rows = Array.from(tbody.rows);
+    if (rows.length < 2) return;
+    const entries = rows.map((row, index) => {
+        const cell = row.cells[columnIndex];
+        const raw = !cell || (row.cells.length === 1 && cell.colSpan > 1)
+            ? '' : (cell.hasAttribute('data-sort-value') ? cell.dataset.sortValue : cell.textContent);
+        return { row, index, parsed: window.UsageTableSort.value(raw, type) };
+    });
+    entries.sort((a, b) => window.UsageTableSort.compare(a.parsed, b.parsed, state.direction)
+        || a.index - b.index);
+    if (entries.every((entry, index) => entry.row === rows[index])) return;
+    const fragment = document.createDocumentFragment();
+    entries.forEach(entry => fragment.appendChild(entry.row));
+    tbody.appendChild(fragment);
+}
+
+function clearTableSortState(table) {
+    if (!table) return;
+    const tableIndex = Array.from(document.querySelectorAll('table')).indexOf(table);
+    if (tableIndex < 0) return;
+    tableSortStates.set(table, null);
+    try { localStorage.removeItem(tableSortStorageKey(table, tableIndex)); } catch (_) {}
+    syncTableSortHeaders(table, null);
+}
+
+function initTableSorting(tables = Array.from(document.querySelectorAll('table'))) {
+    if (!window.UsageTableSort) return;
+    tables.forEach((table, tableIndex) => {
+        const headers = Array.from(table.tHead?.querySelectorAll('th') || []);
+        if (!headers.length || !table.tBodies.length) return;
+        if (table.classList.contains('models-breakdown-table')) {
+            headers.filter(th => th.classList.contains('sortable')).forEach(th => {
+                th.classList.add('table-sortable');
+                th.tabIndex = 0;
+                if (th.dataset.tableSortKeyboardBound === '1') return;
+                th.dataset.tableSortKeyboardBound = '1';
+                th.addEventListener('keydown', event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        th.click();
+                    }
+                });
+            });
+            return;
+        }
+        const state = getTableSortState(table, tableIndex);
+        headers.forEach((th, index) => {
+            const label = String(th.textContent || '').replace(/\s+/g, ' ').trim();
+            if (th.classList.contains('action-col') || th.colSpan > 1
+                || /^(?:thao tác|actions|ranh giới|boundary)$/i.test(label)) return;
+            th.classList.add('table-sortable');
+            th.tabIndex = 0;
+            if (th.dataset.tableSortBound === '1') return;
+            th.dataset.tableSortBound = '1';
+            const toggle = () => {
+                if (document.body.classList.contains('is-resizing-table-column')) return;
+                const key = tableSortColumnKey(th, index);
+                const previous = getTableSortState(table, tableIndex);
+                const direction = previous?.key === key && previous.direction === 'asc' ? 'desc' : 'asc';
+                const next = { key, direction };
+                tableSortStates.set(table, next);
+                try { localStorage.setItem(tableSortStorageKey(table, tableIndex), JSON.stringify(next)); } catch (_) {}
+                if (table.id === 'conv-table' || table.id === 'leaderboard-table') {
+                    const selectId = table.id === 'conv-table' ? 'sort-select' : 'leaderboard-sort-select';
+                    const prefKey = table.id === 'conv-table' ? 'investigationSort' : 'leaderboardSort';
+                    const select = document.getElementById(selectId);
+                    if (select) select.value = 'column';
+                    saveUiPreferences({ [prefKey]: 'column' });
+                }
+                applyTableSort(table, tableIndex);
+            };
+            th.addEventListener('click', event => {
+                if (event.target.closest('.table-col-resizer, button, select, input')) return;
+                toggle();
+            });
+            th.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    toggle();
+                }
+            });
+        });
+        syncTableSortHeaders(table, state);
+        const tbody = table.tBodies[0];
+        if (tbody.dataset.tableSortObserved !== '1') {
+            tbody.dataset.tableSortObserved = '1';
+            new MutationObserver(() => applyTableSort(table, tableIndex))
+                .observe(tbody, { childList: true });
+        }
+        applyTableSort(table, tableIndex);
+    });
+}
+
 function initTableColumnResizers() {
     const tables = Array.from(document.querySelectorAll('table'));
     tables.forEach((table, tableIndex) => {
@@ -6029,4 +6183,5 @@ function initTableColumnResizers() {
         });
     });
     initTableSizeControls(tables);
+    initTableSorting(tables);
 }

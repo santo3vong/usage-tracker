@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=20260925-dashboard-4">
+    <link rel="stylesheet" href="style.css?v=20260925-dashboard-5">
 </head>
 <body>
     <div class="app-container">
@@ -317,6 +317,7 @@
                         </select>
 
                         <select id="sort-select" class="select-styled">
+                            <option value="column">Xếp theo: Cột đã chọn</option>
                             <option value="anomaly-desc">Bất thường trước</option>
                             <option value="date-desc">Mới nhất trước</option>
                             <option value="date-asc">Cũ nhất trước</option>
@@ -840,7 +841,7 @@
                                     <tr>
                                         <th>Mốc Phát Hiện</th>
                                         <th>Nhà Cung Cấp</th>
-                                        <th>Hạn Mức</th>
+                                        <th data-sort-type="text">Hạn Mức</th>
                                         <th>Loại Biến Động</th>
                                         <th>Dung Lượng Cũ → Mới</th>
                                         <th>Ghi Chú Bằng Chứng</th>
@@ -1008,6 +1009,7 @@
                             <option value="GPT-5.4">GPT-5.4</option>
                         </select>
                         <select id="leaderboard-sort-select" class="select-styled">
+                            <option value="column">Xếp theo: Cột đã chọn</option>
                             <option value="recommendation">Xếp theo: Khuyến nghị</option>
                             <option value="iq-desc">Xếp theo: Intelligence cao nhất</option>
                             <option value="speed-desc">Xếp theo: Tốc độ cao nhất</option>
@@ -1027,10 +1029,10 @@
                                 <th>Model, nguồn & trạng thái</th>
                                 <th class="num">Intelligence v4.3.2</th>
                                 <th class="num">Tốc độ</th>
-                                <th class="num">AA cost/task & IQ/$</th>
-                                <th class="num">API $ / Codex credit mỗi 1M In · Cache · Out</th>
-                                <th class="num">Quota cục bộ</th>
-                                <th class="num">All-time cục bộ</th>
+                                <th class="num" title="Sắp theo AA cost/task; IQ/$ là chỉ số bổ sung">AA cost/task & IQ/$</th>
+                                <th class="num" title="Sắp theo giá API input mỗi 1M; model chỉ có credit sẽ ở cuối">API $ / Codex credit mỗi 1M In · Cache · Out</th>
+                                <th class="num" title="Sắp theo % quota/task khi đủ mẫu; số đo %/1M là chỉ số khác đơn vị và ở cuối">Quota cục bộ</th>
+                                <th class="num" title="Sắp theo tổng token cục bộ; chi phí là chỉ số bổ sung">All-time cục bộ</th>
                                 <th>Quyết định sử dụng</th>
                             </tr>
                         </thead>
@@ -1056,7 +1058,7 @@
                                 <th>Model cần được sửa</th>
                                 <th>Model sửa thành công</th>
                                 <th>Loại nhiệm vụ</th>
-                                <th class="num">Thành công / lượt thử</th>
+                                <th class="num" title="Sắp theo tỷ lệ thành công; số lượt thử là bằng chứng bổ sung">Thành công / lượt thử</th>
                                 <th class="num">Hạn mức sửa trung vị</th>
                                 <th>Bằng chứng năng lực</th>
                             </tr>
@@ -1309,7 +1311,7 @@
                                     <th class="num" style="min-width:115px;">Biến Động</th>
                                     <th class="num" style="min-width:130px;">Tokens / Task</th>
                                     <th class="num" style="min-width:125px;">Task Model / Sol</th>
-                                    <th style="min-width:155px;">Coverage / Tin Cậy</th>
+                                    <th data-sort-type="number" style="min-width:155px;" title="Sắp theo độ phủ token; mức tin cậy là thông tin bổ sung">Coverage / Tin Cậy</th>
                                     <th style="min-width:155px;">Ghi Nhận Gần Nhất</th>
                                 </tr>
                             </thead>
@@ -1395,7 +1397,7 @@
                                 <th class="num sortable" data-sort="input_tokens">Input</th>
                                 <th class="num sortable" data-sort="output_tokens">Output</th>
                                 <th class="num sortable" data-sort="thinking_tokens">Thinking</th>
-                                <th class="num" style="min-width:118px;" title="Trung bình tokens trên mỗi phản hồi, tách Input / Output / Thinking">TB / Phản Hồi</th>
+                                <th class="num sortable" data-sort="avg_tokens_per_response" style="min-width:118px;" title="Trung bình tokens trên mỗi phản hồi, tách Input / Output / Thinking">TB / Phản Hồi</th>
                                 <th class="num sortable" data-sort="weekly_quota_pct_used" style="min-width:170px;" title="Tỉ lệ % hạn mức tuần đã tiêu thụ (Weekly Tokens ÷ Hạn Mức Tuần)">Quota Tuần (%)</th>
                                 <th class="num sortable" data-sort="sessions">Phiên</th>
                                 <th class="num sortable" data-sort="responses">Phản Hồi</th>
@@ -1460,8 +1462,8 @@
                         <table class="data-table" id="task-duration-recent-table">
                             <thead><tr>
                                 <th style="min-width:180px;">Model + Effort</th>
-                                <th class="num" style="min-width:145px;">Trung Bình Cửa Sổ</th>
-                                <th class="num" style="min-width:140px;">Trung Vị Cửa Sổ</th>
+                                <th class="num" data-sort-type="duration" style="min-width:145px;">Trung Bình Cửa Sổ</th>
+                                <th class="num" data-sort-type="duration" style="min-width:140px;">Trung Vị Cửa Sổ</th>
                                 <th class="num" style="min-width:145px;">Mẫu Cửa Sổ</th>
                                 <th class="num" style="min-width:135px;">Mẫu Phạm Vi</th>
                                 <th class="num" style="min-width:135px;">Đã Xác Nhận</th>
@@ -1906,7 +1908,8 @@
 
     <!-- Fallback data for offline/file-protocol mode -->
     <script src="data.js"></script>
-    <script src="i18n.js?v=20260925-dashboard-4"></script>
-    <script src="app.js?v=20260925-dashboard-4"></script>
+    <script src="i18n.js?v=20260925-dashboard-5"></script>
+    <script src="table_sort.js?v=20260925-dashboard-5"></script>
+    <script src="app.js?v=20260925-dashboard-5"></script>
 </body>
 </html>

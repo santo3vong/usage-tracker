@@ -2914,32 +2914,45 @@ body.is-resizing-table-column * {
     }
 }
 
-/* Sortable Headers */
-.models-breakdown-table th.sortable {
+/* Sortable headers across the dashboard. The active direction stays visible. */
+table th.table-sortable {
     cursor: pointer;
     user-select: none;
     position: relative;
     transition: color 0.2s;
 }
 
-.models-breakdown-table th.sortable:hover {
+table th.table-sortable:hover,
+table th.table-sortable:focus-visible {
     color: var(--cyan-400);
 }
 
-.models-breakdown-table th.sortable::after {
-    content: '⇅';
-    margin-left: 4px;
-    opacity: 0.3;
-    font-size: 0.75rem;
+table th.table-sortable:focus-visible {
+    outline: 2px solid var(--cyan-400);
+    outline-offset: -2px;
 }
 
-.models-breakdown-table th.sort-asc::after {
+table th.table-sortable::after {
+    content: '⇅';
+    margin-left: 6px;
+    opacity: 0;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+}
+
+table th.table-sortable:hover::after,
+table th.table-sortable:focus-visible::after {
+    opacity: 0.8;
+}
+
+table th.table-sortable.sort-asc::after {
     content: '↑';
     opacity: 1;
     color: var(--cyan-400);
 }
 
-.models-breakdown-table th.sort-desc::after {
+table th.table-sortable.sort-desc::after {
     content: '↓';
     opacity: 1;
     color: var(--cyan-400);

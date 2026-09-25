@@ -115,7 +115,7 @@ Xử lý thiếu số liệu: Với những bài toán chưa từng chạy trên
 d. Giá trị mang lại
 Chọn model theo số liệu định lượng: Nhìn vào ma trận sẽ biết rõ: loại việc nào đơn giản để giao cho model nhẹ nhằm tiết kiệm quota, và loại việc nào bắt buộc phải dùng model mạnh ngay từ đầu để tránh vòng lặp sửa lỗi tốn kém.
 
-Các thiết lập gần nhất như ngôn ngữ, model, bộ lọc, khoảng thời gian, đơn vị biểu đồ, kích thước bảng và độ rộng cột được lưu trong trình duyệt để lần mở sau giữ nguyên cách xem.
+Các thiết lập gần nhất như ngôn ngữ, model, bộ lọc, khoảng thời gian, đơn vị biểu đồ, kích thước bảng, độ rộng cột và cột đang sắp xếp được lưu trong trình duyệt để lần mở sau giữ nguyên cách xem. Rê chuột lên tiêu đề cột để thấy mũi tên; bấm lần đầu để xếp tăng dần, bấm lại để xếp giảm dần. Bảng tự giữ thứ tự đó khi dữ liệu cập nhật hoặc đổi bộ lọc. Các cột có nhiều chỉ số trong một ô sắp theo chỉ số chính ghi ở chú thích; dữ liệu chưa đo được luôn ở cuối, còn hàng tổng cộng ở cuối bảng.
 
 <img width="1757" height="687" alt="Ma trận hạn mức theo loại nhiệm vụ" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
 

@@ -96,7 +96,7 @@ A 2D matrix quantifies the capability and actual cost profile of each `Model + E
 
 ### d. Key Takeaways & UI Behavior
 * **Quantitative Model Selection:** The matrix provides concrete data on when lighter models are sufficient to conserve quota, and when high-capability models are necessary upfront to prevent costly re-teaching loops.
-* **Persistent UI Settings:** Language, filters, models, date ranges, chart units, table sizes, and column widths are retained in browser storage (`localStorage`) between launches.
+* **Persistent UI Settings:** Language, filters, models, date ranges, chart units, table sizes, column widths, and the active table sort are retained in browser storage (`localStorage`) between launches. Hover over a column heading to reveal its arrows; click once for ascending order and again for descending order. Sorting survives data refreshes and filter changes. Mixed-metric cells use the primary measure named in the heading tooltip; missing measurements sort last and summary footers remain at the bottom.
 
 <img width="1757" height="687" alt="Quota by task-type matrix" src="https://github.com/user-attachments/assets/224ce827-b99f-4fa6-95a6-d43466856c43" />
 
