@@ -5,8 +5,11 @@ __pycache__/
 accounts.json
 codex_usage.json
 codex_models_cache.json
+codex_quota_identity.json
 codex_mission_turns_cache.json
 codex_mission_reviews.json
+aa_benchmarks_cache.json
+aa_api_key.txt
 quota_observations.json
 real_quotas.json
 time_series_history.json

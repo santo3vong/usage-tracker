@@ -1,5 +1,5 @@
 /* ==========================================================================
-   AGY Live Usage Tracker — Premium Dark Theme & Design System
+   Usage Tracker — Premium Dark Theme & Design System
    ========================================================================== */
 
 :root {
@@ -64,8 +64,37 @@
     display: grid;
     grid-template-columns: 82px minmax(0, 1fr);
     align-items: start;
+    position: relative;
     width: 100%;
 }
+
+.model-timeline-tooltip {
+    position: absolute;
+    z-index: 5;
+    width: max-content;
+    min-width: min(240px, calc(100% - 8px));
+    max-width: min(380px, calc(100% - 8px));
+    max-height: min(70vh, 480px);
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px;
+    border: 1px solid rgba(148, 163, 184, 0.45);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.97);
+    color: #f8fafc;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.model-timeline-tooltip[hidden] { display: none; }
+.model-timeline-tooltip-date { color: #94a3b8; }
+.model-timeline-tooltip-total { margin: 3px 0 5px; font-weight: 700; }
+.model-timeline-tooltip-rows { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.model-timeline-tooltip-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.model-timeline-tooltip-model { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.model-timeline-tooltip-swatch { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 2px; }
+.model-timeline-tooltip-value { flex: 0 0 auto; font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .model-timeline-fixed-axis {
     position: relative;
@@ -2792,11 +2821,25 @@ body.is-resizing-table-column * {
 }
 
 .quota-timeline-swatch {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    width: 11px;
+    height: 11px;
+    flex: 0 0 11px;
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 3px;
     background: var(--quota-color, var(--cyan-400));
     box-shadow: 0 0 6px var(--quota-color, var(--cyan-400));
+}
+
+.aa-sync-status {
+    margin-top: 0.65rem;
+    color: #a5b4fc;
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.aa-sync-status a {
+    color: #67e8f9;
+    text-decoration: underline;
 }
 
 .quota-timeline-canvas-wrap {
@@ -2808,6 +2851,13 @@ body.is-resizing-table-column * {
 .quota-timeline-canvas-wrap canvas {
     width: 100%;
     height: 100%;
+}
+
+.task-duration-details {
+    margin-top: 0.75rem;
+    color: var(--text-muted, #94a3b8);
+    font-size: 0.78rem;
+    line-height: 1.55;
 }
 
 .quota-timeline-table-wrap {

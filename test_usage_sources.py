@@ -2335,7 +2335,7 @@ class UsageSourcesTests(unittest.TestCase):
 
         with open(cache_path, 'r', encoding='utf-8') as f:
             cache = json.load(f)
-        self.assertEqual(cache['version'], 4)
+        self.assertEqual(cache['version'], server.CODEX_MODELS_CACHE_VERSION)
         cached_entry = next(iter(cache['files'].values()))
         self.assertEqual(len(cached_entry['quota_observations']), 2)
         self.assertEqual(cached_entry['finished_turn_ids'], ['turn-test'])
@@ -2400,6 +2400,25 @@ class UsageSourcesTests(unittest.TestCase):
         self.assertEqual(len(result['date_keys']), 30)
         self.assertEqual(result['range']['mode'], 'rolling')
         self.assertEqual(result['range']['days'], 30)
+
+    def test_model_colors_are_distinct_and_stable_across_timeline_rankings(self):
+        names = server.MODEL_COLOR_NAMES
+        colors = [server.get_model_color(name) for name in names]
+        self.assertEqual(len(colors), len(set(colors)))
+        self.assertNotEqual(server.get_model_color('5.6 sol xhigh'), server.get_model_color('gpt-6-sol xhigh'))
+        self.assertEqual(server.get_model_color('GPT-6-SOL XHIGH'), server.get_model_color('gpt-6-sol xhigh'))
+
+        event_dt = datetime.now(timezone.utc)
+        model_a, model_b = '5.6 sol high', 'gpt-6-sol xhigh'
+
+        def timeline(a_tokens, b_tokens):
+            events = [
+                {'dt': event_dt, 'model': model_a, 'tokens': a_tokens},
+                {'dt': event_dt, 'model': model_b, 'tokens': b_tokens},
+            ]
+            return {row['name']: row['color'] for row in server.build_models_daily_timeline(events, {}, {}, days=7)['models']}
+
+        self.assertEqual(timeline(100, 200), timeline(200, 100))
 
     def test_models_daily_timeline_custom_range_is_inclusive_and_sums_models(self):
         today = datetime.now().astimezone().date()
@@ -2567,6 +2586,135 @@ class UsageSourcesTests(unittest.TestCase):
         model = next(item for item in result['models'] if item['name'] == 'gpt-test')
         self.assertEqual(model['total_period_tokens'], 321)
         self.assertEqual(model['daily_tokens'][result['date_keys'].index(old_day.isoformat())], 321)
+
+    def test_codex_fast_is_a_separate_model_across_usage_quota_and_missions(self):
+        sessions_dir = os.path.join(self._temp_dir.name, 'fast_sessions')
+        os.makedirs(sessions_dir)
+        log_path = os.path.join(sessions_dir, 'fast.jsonl')
+        usage_cache = os.path.join(self._temp_dir.name, 'fast_usage_cache.json')
+        mission_cache = os.path.join(self._temp_dir.name, 'fast_mission_cache.json')
+        now = datetime.now(timezone.utc)
+        rows = []
+
+        def add(second, kind, payload):
+            rows.append({
+                'timestamp': (now - timedelta(minutes=2) + timedelta(seconds=second)).isoformat(),
+                'type': kind, 'payload': payload,
+            })
+
+        def setting(second, tier):
+            add(second, 'event_msg', {
+                'type': 'thread_settings_applied', 'thread_settings': {'service_tier': tier},
+            })
+
+        def start(second, turn):
+            add(second, 'event_msg', {'type': 'task_started', 'turn_id': turn})
+            add(second + 0.1, 'turn_context', {
+                'turn_id': turn, 'model': 'gpt-5.6-sol', 'effort': 'xhigh',
+            })
+            add(second + 0.2, 'response_item', {
+                'type': 'message', 'role': 'user',
+                'content': [{'type': 'input_text', 'text': 'Fix the web app'}],
+            })
+
+        def usage(second, request_id, tokens, cumulative):
+            add(second, 'event_msg', {
+                'type': 'token_count', 'request_id': request_id,
+                'rate_limits': {'primary': {
+                    'window_minutes': 300, 'used_percent': 10 + second,
+                    'resets_at': (now + timedelta(hours=3)).isoformat(),
+                }},
+                'info': {
+                    'last_token_usage': {
+                        'input_tokens': tokens, 'output_tokens': 0, 'total_tokens': tokens,
+                    },
+                    'total_token_usage': {
+                        'input_tokens': cumulative, 'output_tokens': 0,
+                        'total_tokens': cumulative,
+                    },
+                },
+            })
+
+        setting(0, 'default')
+        start(1, 'standard-1')
+        usage(2, 's1', 100, 100)
+        setting(3, 'priority')  # A change during a task applies to the next task.
+        usage(4, 's1b', 20, 120)
+        add(5, 'event_msg', {'type': 'task_complete', 'turn_id': 'standard-1'})
+        start(6, 'fast-1')
+        usage(7, 'f1', 200, 320)
+        add(8, 'event_msg', {'type': 'task_complete', 'turn_id': 'fast-1'})
+        setting(9, 'default')
+        start(10, 'standard-2')
+        usage(11, 's2', 50, 370)
+        add(12, 'event_msg', {'type': 'task_complete', 'turn_id': 'standard-2'})
+        with open(log_path, 'w', encoding='utf-8') as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + '\n')
+
+        model_usage = server.scan_codex_model_usage(
+            sessions_dir=sessions_dir, cache_file=usage_cache, now=now,
+        )
+        standard = model_usage['models']['5.6 sol xhigh']
+        fast = model_usage['models']['5.6 sol xhigh (fast)']
+        self.assertEqual(standard['total_tokens'], 170)
+        self.assertEqual(fast['total_tokens'], 200)
+        self.assertEqual(fast['service_tier'], 'fast')
+        self.assertAlmostEqual(
+            fast['cost_usd'],
+            2.5 * server.estimate_model_cost('5.6 sol xhigh', input_tokens=200),
+            places=4,
+        )
+        self.assertTrue(any(
+            item['model_key'] == '5.6 sol xhigh (fast)' and item['service_tier'] == 'fast'
+            for item in model_usage['quota_observations']
+        ))
+
+        missions = server.scan_codex_mission_turns(
+            sessions_dir=sessions_dir, cache_file=mission_cache, now=now,
+        )
+        by_turn = {item['turn_id']: item for item in missions['turns']}
+        self.assertEqual(by_turn['standard-1']['model_key'], '5.6 sol xhigh')
+        self.assertEqual(by_turn['fast-1']['model_key'], '5.6 sol xhigh (fast)')
+        self.assertEqual(by_turn['standard-2']['model_key'], '5.6 sol xhigh')
+        self.assertNotEqual(
+            server.get_model_color('5.6 sol xhigh'),
+            server.get_model_color('5.6 sol xhigh (fast)'),
+        )
+
+        # An appended setting must keep exactly-once accounting and restore
+        # both the pending and active tier from the incremental cache.
+        appended = [
+            {'timestamp': now.isoformat(), 'type': 'event_msg',
+             'payload': {'type': 'thread_settings_applied',
+                         'thread_settings': {'service_tier': 'fast'}}},
+            {'timestamp': now.isoformat(), 'type': 'event_msg',
+             'payload': {'type': 'task_started', 'turn_id': 'fast-2'}},
+            {'timestamp': now.isoformat(), 'type': 'turn_context',
+             'payload': {'turn_id': 'fast-2', 'model': 'gpt-5.6-sol', 'effort': 'xhigh'}},
+            {'timestamp': now.isoformat(), 'type': 'response_item',
+             'payload': {'type': 'message', 'role': 'user',
+                         'content': [{'type': 'input_text', 'text': 'Fix another page'}]}},
+            {'timestamp': now.isoformat(), 'type': 'event_msg',
+             'payload': {'type': 'token_count', 'request_id': 'f2',
+                         'info': {'last_token_usage': {
+                             'input_tokens': 10, 'output_tokens': 0, 'total_tokens': 10,
+                         }}}},
+        ]
+        with open(log_path, 'a', encoding='utf-8') as handle:
+            for row in appended:
+                handle.write(json.dumps(row) + '\n')
+        model_usage = server.scan_codex_model_usage(
+            sessions_dir=sessions_dir, cache_file=usage_cache, now=now,
+        )
+        self.assertEqual(model_usage['models']['5.6 sol xhigh (fast)']['total_tokens'], 210)
+        missions = server.scan_codex_mission_turns(
+            sessions_dir=sessions_dir, cache_file=mission_cache, now=now,
+        )
+        self.assertEqual(
+            next(item for item in missions['turns'] if item['turn_id'] == 'fast-2')['model_key'],
+            '5.6 sol xhigh (fast)',
+        )
 
     def test_models_daily_timeline_rejects_invalid_custom_ranges(self):
         today = datetime.now().astimezone().date()

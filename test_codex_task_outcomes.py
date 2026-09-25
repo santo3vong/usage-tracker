@@ -47,6 +47,39 @@ def usage(turn_id, model, total, at):
 
 
 class CodexTaskOutcomeTests(unittest.TestCase):
+    def test_duration_timeline_excludes_user_gaps_and_overlapping_work(self):
+        mission = {
+            'accepted': True, 'end_at': '2026-09-25T10:00:00Z',
+            'outcome_reviewed': True,
+            'turns': [
+                {'completed': True, 'started_at': '2026-09-25T08:00:00Z',
+                 'completed_at': '2026-09-25T08:30:00Z'},
+                {'completed': True, 'started_at': '2026-09-25T08:20:00Z',
+                 'completed_at': '2026-09-25T08:40:00Z'},
+                {'completed': True, 'started_at': '2026-09-25T09:50:00Z',
+                 'completed_at': '2026-09-25T10:00:00Z'},
+            ],
+        }
+        second = {
+            'accepted': True, 'end_at': '2026-09-24T11:00:00Z',
+            'turns': [{'completed': True,
+                       'started_at': '2026-09-24T10:00:00Z',
+                       'completed_at': '2026-09-24T11:00:00Z'}],
+        }
+        unresolved = {**mission, 'accepted': False}
+        unknown = {'accepted': True, 'end_at': '2026-09-25T12:00:00Z', 'turns': []}
+        self.assertEqual(server._codex_mission_active_minutes(mission), 50)
+        timeline = server.build_codex_task_duration_timeline(
+            [mission, second, unresolved, unknown],
+            now=datetime(2026, 9, 25, tzinfo=timezone.utc), days=3, windows=(1, 7),
+        )
+        latest = timeline['windows']['7']['points'][-1]
+        self.assertEqual(latest['task_count'], 2)
+        self.assertEqual(latest['reviewed_count'], 1)
+        self.assertEqual(latest['mean_minutes'], 55)
+        self.assertEqual(timeline['windows']['1']['points'][-1]['mean_minutes'], 50)
+        self.assertEqual(timeline['missing_duration_count'], 1)
+
     def test_repair_capabilities_use_only_accepted_terminal_repairs_as_success(self):
         missions = [
             {

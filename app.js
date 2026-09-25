@@ -1,5 +1,5 @@
 /* ==========================================================================
-   AGY Live Usage Tracker — Frontend Application & Realtime Sync Engine
+   Usage Tracker — Frontend Application & Realtime Sync Engine
    ========================================================================== */
 
 // Global State
@@ -77,6 +77,21 @@ const THEME = {
 };
 
 // Utilities
+function colorForModelKey(modelKey) {
+    const key = String(modelKey || '');
+    const mapped = currentData?.summary?.model_colors?.[key];
+    if (mapped) return mapped;
+    const timelineMatch = currentData?.summary?.models_daily_timeline?.models?.find(model => model.name === key);
+    if (timelineMatch?.color) return timelineMatch.color;
+    // Compatibility with older static exports that have no model color map.
+    let hash = 2166136261;
+    for (const character of key.toLowerCase()) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16777619);
+    }
+    return THEME.palette[(hash >>> 0) % THEME.palette.length];
+}
+
 function formatNumber(num) {
     if (num === null || num === undefined) return '0';
     if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
@@ -312,7 +327,7 @@ class CanvasCharts {
         topItems.forEach((item, i) => {
             const y = pad.top + i * (chartH / topItems.length) + (chartH / topItems.length - barH) / 2;
             const w = (item.value / maxVal) * chartW;
-            const col = THEME.palette[i % THEME.palette.length];
+            const col = item.color || THEME.palette[i % THEME.palette.length];
 
             // Bar shape
             const r = Math.min(4, barH / 2);
@@ -770,6 +785,7 @@ class CanvasCharts {
         const barWidth = Math.min(32, Math.max(2, groupWidth * 0.68));
         const dateKeys = Array.isArray(timelineData.date_keys) ? timelineData.date_keys : [];
         const labelStride = numPoints <= 10 ? 1 : (numPoints <= 35 ? 5 : (numPoints <= 100 ? 10 : Math.ceil(numPoints / 10)));
+        const segmentsByDate = Array.from({ length: numPoints }, () => []);
 
         dailyTotals.forEach((total, dayIndex) => {
             const xCenter = pad.left + groupWidth * (dayIndex + 0.5);
@@ -781,7 +797,9 @@ class CanvasCharts {
                 const segmentHeight = (val / maxVal) * chartH;
                 const y = stackBottomY - segmentHeight;
                 ctx.fillStyle = model.color || '#06b6d4';
-                ctx.fillRect(xCenter - barWidth / 2, y, barWidth, Math.max(1, segmentHeight));
+                const drawnHeight = Math.max(1, segmentHeight);
+                ctx.fillRect(xCenter - barWidth / 2, y, barWidth, drawnHeight);
+                segmentsByDate[dayIndex].push({ model, value: val, top: y, bottom: y + drawnHeight });
                 stackBottomY = y;
             });
 
@@ -807,6 +825,104 @@ class CanvasCharts {
                 ctx.fillText(label, xCenter, pad.top + chartH + 10);
             }
         });
+        this.bindStackedBarTooltip(canvas, {
+            dates, segmentsByDate, pad, groupWidth, barWidth,
+            valueFormatter: options.tooltipFormatter || totalFormatter,
+            valueLabel: options.tooltipValueLabel || (() => window.UsageI18n?.language === 'en' ? 'Value' : 'Giá trị'),
+        });
+    }
+
+    static bindStackedBarTooltip(canvas, chart) {
+        const frame = canvas.closest('.model-timeline-chart-frame');
+        if (!frame) return;
+        let tooltip = frame.querySelector('.model-timeline-tooltip');
+        if (!tooltip) {
+            tooltip = document.createElement('div');
+            tooltip.className = 'model-timeline-tooltip';
+            tooltip.setAttribute('role', 'tooltip');
+            tooltip.hidden = true;
+            frame.appendChild(tooltip);
+        }
+        tooltip.hidden = true;
+        tooltip.dataset.hitKey = '';
+        const hide = () => {
+            tooltip.hidden = true;
+            canvas.style.cursor = '';
+        };
+        const showForPointer = event => {
+            const canvasRect = canvas.getBoundingClientRect();
+            const x = event.clientX - canvasRect.left;
+            const y = event.clientY - canvasRect.top;
+            const dayIndex = Math.floor((x - chart.pad.left) / chart.groupWidth);
+            const barCenter = chart.pad.left + chart.groupWidth * (dayIndex + 0.5);
+            if (dayIndex < 0 || dayIndex >= chart.dates.length ||
+                Math.abs(x - barCenter) > chart.barWidth / 2) {
+                hide();
+                return;
+            }
+            const segments = chart.segmentsByDate[dayIndex];
+            if (!segments.length || y < segments[segments.length - 1].top || y > segments[0].bottom) {
+                hide();
+                return;
+            }
+            const hitKey = `${dayIndex}:${window.UsageI18n?.language || 'vi'}`;
+            if (tooltip.dataset.hitKey !== hitKey) {
+                tooltip.replaceChildren();
+                const date = document.createElement('div');
+                date.className = 'model-timeline-tooltip-date';
+                date.textContent = `${chart.dates[dayIndex]} · ${chart.valueLabel()}`;
+                const total = document.createElement('div');
+                total.className = 'model-timeline-tooltip-total';
+                total.textContent = `${window.UsageI18n?.language === 'en' ? 'Total' : 'Tổng'}: ${chart.valueFormatter(segments.reduce((sum, item) => sum + item.value, 0))}`;
+                const rows = document.createElement('div');
+                rows.className = 'model-timeline-tooltip-rows';
+                [...segments].sort((a, b) => b.value - a.value).forEach(item => {
+                    const row = document.createElement('div');
+                    row.className = 'model-timeline-tooltip-row';
+                    const model = document.createElement('span');
+                    model.className = 'model-timeline-tooltip-model';
+                    const swatch = document.createElement('span');
+                    swatch.className = 'model-timeline-tooltip-swatch';
+                    swatch.style.backgroundColor = item.model.color || '#06b6d4';
+                    model.append(swatch, document.createTextNode(item.model.name));
+                    const value = document.createElement('span');
+                    value.className = 'model-timeline-tooltip-value';
+                    value.textContent = chart.valueFormatter(item.value);
+                    row.append(model, value);
+                    rows.appendChild(row);
+                });
+                tooltip.append(date, total, rows);
+                tooltip.dataset.hitKey = hitKey;
+            }
+            tooltip.hidden = false;
+            canvas.style.cursor = 'crosshair';
+            const frameRect = frame.getBoundingClientRect();
+            const left = Math.max(4, Math.min(
+                event.clientX - frameRect.left + 12,
+                frame.clientWidth - tooltip.offsetWidth - 4,
+            ));
+            const viewportTop = Math.max(4, 8 - frameRect.top);
+            const viewportBottom = Math.max(viewportTop, window.innerHeight - frameRect.top - tooltip.offsetHeight - 8);
+            const above = event.clientY - frameRect.top - tooltip.offsetHeight - 12;
+            const below = event.clientY - frameRect.top + 12;
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${Math.max(viewportTop, Math.min(above >= viewportTop ? above : below, viewportBottom))}px`;
+        };
+        canvas.onpointermove = showForPointer;
+        canvas.onmousemove = showForPointer;
+        const hideUnlessEnteringTooltip = event => {
+            if (!tooltip.contains(event.relatedTarget)) hide();
+        };
+        canvas.onpointerleave = hideUnlessEnteringTooltip;
+        canvas.onmouseleave = hideUnlessEnteringTooltip;
+        canvas.onpointercancel = hide;
+        tooltip.onpointerleave = hide;
+        tooltip.onmouseleave = hide;
+        const scroll = canvas.closest('.model-timeline-scroll');
+        if (scroll && !scroll.dataset.tooltipScrollBound) {
+            scroll.addEventListener('scroll', hide);
+            scroll.dataset.tooltipScrollBound = 'true';
+        }
     }
 }
 
@@ -939,8 +1055,10 @@ function renderAll(data) {
         summary.models_breakdown || [],
         summary.codex_usage || {}
     );
+    renderAASyncStatus(summary.aa_sync || {}, summary.leaderboard || []);
     renderQuotas(summary.quotas, summary.source_breakdowns || summary.source_breakdown);
     renderCodexRateLimits(summary.codex_usage);
+    renderCodexWeeklyCapacity(summary.codex_usage);
     renderAccountManager(summary.current_account, summary.accounts_manager);
     renderModelsBreakdown(summary.models_breakdown || [], summary.codex_usage || {}, summary.models_daily_timeline);
     renderCodexTaskOutcomes(summary.codex_usage || {});
@@ -964,7 +1082,7 @@ function renderTimeSeriesAnalytics(tsData) {
         CanvasCharts.drawAreaSpline(canvas5h, fiveH.labels, datasets5h, { limit: fiveH.gemini_limit });
 
         const badgeUsed5h = document.getElementById('ts-5h-used-badge');
-        if (badgeUsed5h) badgeUsed5h.textContent = `${formatNumber(fiveH.current_used_5h || 0)} tokens (${(fiveH.current_pct_5h || 100).toFixed(1)}% còn lại)`;
+        if (badgeUsed5h) badgeUsed5h.textContent = `${formatNumber(fiveH.current_used_5h || 0)} tokens (${(fiveH.current_pct_5h || 100).toFixed(1)}% ${window.UsageI18n?.language === 'en' ? 'remaining' : 'còn lại'})`;
     }
 
     // 2. Render Weekly Timeline Chart
@@ -977,7 +1095,7 @@ function renderTimeSeriesAnalytics(tsData) {
         CanvasCharts.drawWeeklyTimeline(canvasWk, weekly.labels, datasetsWk, { limit: weekly.gemini_limit });
 
         const badgeUsedWk = document.getElementById('ts-wk-used-badge');
-        if (badgeUsedWk) badgeUsedWk.textContent = `${formatNumber(weekly.current_used_weekly || 0)} tokens (${(weekly.current_pct_weekly || 100).toFixed(1)}% còn lại)`;
+        if (badgeUsedWk) badgeUsedWk.textContent = `${formatNumber(weekly.current_used_weekly || 0)} tokens (${(weekly.current_pct_weekly || 100).toFixed(1)}% ${window.UsageI18n?.language === 'en' ? 'remaining' : 'còn lại'})`;
     }
 
     // 3. Render Capacity Evolution Chart
@@ -1024,7 +1142,9 @@ function renderTimeSeriesAnalytics(tsData) {
         ].filter(dataset => dataset.data);
         CanvasCharts.drawAreaSpline(canvasCapWeekly, weekly.labels, weeklyDatasets, { limit: weekly.current_capacity });
         const badgeWeekly = document.getElementById('ts-cap-weekly-badge');
-        if (badgeWeekly) badgeWeekly.textContent = `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed phụ thuộc source mix`;
+        if (badgeWeekly) badgeWeekly.textContent = window.UsageI18n?.language === 'en'
+            ? `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed estimate depends on source mix`
+            : `Weekly transcript: ${formatNumber(weekly.current_capacity || 0)} tokens • mixed phụ thuộc source mix`;
     }
 
     // 4. Render Policy Shifts & Empirical Audit Table Body
@@ -1634,7 +1754,7 @@ function setupExport() {
 
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentData, null, 2));
         const dlAnchor = document.createElement('a');
-        const filename = `agy_usage_report_${new Date().toISOString().slice(0, 10)}.json`;
+        const filename = `usage_tracker_report_${new Date().toISOString().slice(0, 10)}.json`;
         dlAnchor.setAttribute("href", dataStr);
         dlAnchor.setAttribute("download", filename);
         document.body.appendChild(dlAnchor);
@@ -1676,6 +1796,7 @@ function setupTabs() {
                     } else if (targetId === 'tab-quota') {
                         renderQuotas(currentData.summary.quotas, currentData.summary.source_breakdowns || currentData.summary.source_breakdown);
                         renderCodexRateLimits(currentData.summary.codex_usage);
+                        renderCodexWeeklyCapacity(currentData.summary.codex_usage);
                         renderAccountManager(currentData.summary.current_account, currentData.summary.accounts_manager);
                         renderTimeSeriesAnalytics(currentData.summary.time_series);
                     } else if (targetId === 'tab-leaderboard') {
@@ -1721,7 +1842,16 @@ function enrichLeaderboardData(leaderboard, breakdown, codexUsage) {
     const usageByKey = new Map();
     (breakdown || []).forEach(row => {
         const key = normalizeLeaderboardKey(row.model_id || row.model_name);
-        if (key) usageByKey.set(key, row);
+        if (!key) return;
+        const current = usageByKey.get(key) || {
+            total_tokens: 0, total_cost_usd: 0, sessions: 0, responses: 0, cost_known: true,
+        };
+        current.total_tokens += Number(row.total_tokens || 0);
+        current.total_cost_usd += Number(row.total_cost_usd || 0);
+        current.sessions += Number(row.sessions || 0);
+        current.responses += Number(row.responses || 0);
+        current.cost_known = current.cost_known && row.cost_known !== false;
+        usageByKey.set(key, current);
     });
 
     const automatic = codexUsage?.automatic_model_usage || {};
@@ -1744,19 +1874,22 @@ function enrichLeaderboardData(leaderboard, breakdown, codexUsage) {
         const automaticLocal = automaticUsageByKey.get(key);
         const efficiency = efficiencyByKey.get(key);
         const taskQuota = taskQuotaByKey.get(key);
+        // Model Breakdown already includes automatic Codex logs. Add the raw
+        // automatic row only when a caller did not supply a breakdown row.
+        const fallbackAutomatic = local ? null : automaticLocal;
         const legacyTokens = Number(local?.total_tokens ?? item.local_total_tokens ?? 0);
-        const automaticTokens = Number(automaticLocal?.total_tokens ?? 0);
+        const automaticTokens = Number(fallbackAutomatic?.total_tokens ?? 0);
         const legacyCost = Number(local?.total_cost_usd ?? item.local_cost_usd ?? 0);
-        const automaticCost = Number(automaticLocal?.cost_usd ?? 0);
+        const automaticCost = Number(fallbackAutomatic?.cost_usd ?? 0);
         const legacySessions = Number(local?.sessions ?? item.local_sessions ?? 0);
-        const automaticSessions = Number(automaticLocal?.sessions ?? 0);
+        const automaticSessions = Number(fallbackAutomatic?.sessions ?? 0);
         const legacyResponses = Number(local?.responses ?? item.local_responses ?? 0);
-        const automaticResponses = Number(automaticLocal?.responses ?? 0);
+        const automaticResponses = Number(fallbackAutomatic?.responses ?? 0);
         return {
             ...item,
             local_total_tokens: legacyTokens + automaticTokens,
             local_cost_usd: legacyCost + automaticCost,
-            local_cost_known: (local ? local.cost_known !== false : true) && (automaticLocal ? automaticLocal.cost_known !== false : true),
+            local_cost_known: (local ? local.cost_known !== false : true) && (fallbackAutomatic ? fallbackAutomatic.cost_known !== false : true),
             local_sessions: legacySessions + automaticSessions,
             local_responses: legacyResponses + automaticResponses,
             local_quota_pct_per_1m_tokens: efficiency?.quota_pct_per_1m_tokens ?? null,
@@ -1780,12 +1913,60 @@ function renderLeaderboard(leaderboard, breakdown = [], codexUsage = {}) {
     renderModelCards(enrichedLeaderboardRows);
 }
 
+function renderAASyncStatus(sync, leaderboard) {
+    const rows = leaderboard.filter(row => row.benchmark_source === 'Artificial Analysis' && row.benchmark_as_of);
+    const newest = [...rows].sort((a, b) => String(b.benchmark_as_of).localeCompare(String(a.benchmark_as_of)))[0];
+    const version = newest?.benchmark_index_version || '4.3.2';
+    const date = newest?.benchmark_as_of || sync.snapshot_as_of || '';
+    const isEnglish = window.UsageI18n?.language === 'en';
+    const tag = document.getElementById('aa-hero-tag');
+    if (tag) tag.textContent = `⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v${version} • ${isEnglish ? 'UPDATED' : 'CẬP NHẬT'} ${date}`;
+    const indexLabel = document.getElementById('aa-index-label');
+    if (indexLabel) indexLabel.textContent = `Artificial Analysis v${version}`;
+    const comparison = document.getElementById('aa-comparison-title');
+    if (comparison) comparison.textContent = isEnglish
+        ? `Intelligence Index v${version} and Output Speed`
+        : `So Sánh Intelligence Index v${version} Và Tốc Độ Output`;
+    const chartTitle = document.getElementById('aa-iq-chart-title');
+    if (chartTitle) chartTitle.textContent = `Intelligence Index v${version}`;
+
+    const status = document.getElementById('aa-sync-status');
+    if (!status) return;
+    const lastGood = sync.last_success_at?.slice(0, 10);
+    if (sync.state === 'needs_key') {
+        status.textContent = isEnglish
+            ? `Official AA daily sync needs a server-side API key. Showing the verified snapshot from ${date}.`
+            : `Tự đồng bộ AA hằng ngày cần API key ở server. Đang dùng bản chụp đã xác minh ngày ${date}.`;
+    } else if (sync.state === 'refreshing') {
+        status.textContent = isEnglish
+            ? `Refreshing from the official AA API in the background${lastGood ? `; last successful sync: ${lastGood}` : ''}.`
+            : `Đang cập nhật nền từ API chính thức của AA${lastGood ? `; lần đồng bộ thành công gần nhất: ${lastGood}` : ''}.`;
+    } else if (sync.state === 'error') {
+        status.textContent = isEnglish
+            ? `AA sync failed (${sync.error || 'unknown error'}); showing the last verified data${lastGood ? ` from ${lastGood}` : ''}.`
+            : `Đồng bộ AA lỗi (${sync.error || 'không rõ'}); giữ dữ liệu đã xác minh${lastGood ? ` ngày ${lastGood}` : ''}.`;
+    } else if (lastGood) {
+        status.textContent = isEnglish
+            ? `Official AA API sync: ${lastGood} · ${sync.cached_models || 0} matched model variants · checked daily.`
+            : `Đồng bộ API chính thức của AA: ${lastGood} · ${sync.cached_models || 0} biến thể đã ghép · kiểm tra hằng ngày.`;
+    } else {
+        status.textContent = isEnglish ? `Verified AA snapshot: ${date}.` : `Bản chụp AA đã xác minh: ${date}.`;
+    }
+}
+
 function hasLeaderboardMetric(value) {
     return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 }
 
 function leaderboardMetric(value, suffix = '') {
     return hasLeaderboardMetric(value) ? `${value}${suffix}` : '—';
+}
+
+function formatAACostPerTask(value) {
+    if (!hasLeaderboardMetric(value)) return '—';
+    const cost = Number(value);
+    const digits = cost > 0 && cost < 0.01 ? 8 : cost < 0.1 ? 4 : 2;
+    return `$${cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: digits })}`;
 }
 
 function compareMetricDesc(field) {
@@ -1813,7 +1994,7 @@ function getFilteredLeaderboardRows() {
     const family = document.getElementById('leaderboard-family-select')?.value || 'all';
     return enrichedLeaderboardRows.filter(item => {
         const inScope = scope === 'all'
-            || (scope === 'selectable' && item.selectable_in_codex)
+            || (scope === 'selectable' && (item.selectable_in_codex || item.observed_locally))
             || (scope === 'recommended' && item.recommended)
             || (scope === 'local' && Number(item.local_total_tokens || 0) > 0)
             || (scope === 'current' && item.generation_status !== 'previous');
@@ -1843,8 +2024,8 @@ function renderLeaderboardHighlights(leaderboard) {
         {
             cls: 'purple', cardCls: 'c-purple', icon: '🧠',
             val: topIQ ? `${topIQ.intelligence_index} IQ` : 'N/A',
-            label: '#1 Intelligence Index v4.3.2',
-            sub: topIQ ? `${topIQ.display_name || topIQ.model_name} • ${leaderboardText(topIQ.benchmark_status === 'estimate' ? 'AA ước tính' : 'AA đo độc lập')}` : leaderboardText('Không có model trong bộ lọc')
+            label: `#1 Intelligence Index v${topIQ?.benchmark_index_version || '4.3.2'}`,
+            sub: topIQ ? `${topIQ.display_name || topIQ.model_name} • ${leaderboardText(topIQ.benchmark_status === 'estimate' ? 'AA ước tính' : (topIQ.benchmark_status === 'published' ? 'AA công bố' : 'AA đo độc lập'))}` : leaderboardText('Không có model trong bộ lọc')
         },
         {
             cls: 'cyan', cardCls: 'c-cyan', icon: '⚡',
@@ -1883,7 +2064,11 @@ function renderLeaderboardCharts(leaderboard) {
             .filter(m => hasLeaderboardMetric(m.intelligence_index))
             .sort(compareMetricDesc('intelligence_index'))
             .slice(0, 14)
-            .map(m => ({ label: (m.display_name || m.model_name).replace('Gemini ', 'G-'), value: m.intelligence_index }));
+            .map(m => ({
+                label: (m.display_name || m.model_name).replace('Gemini ', 'G-'),
+                value: m.intelligence_index,
+                color: colorForModelKey(m.model_name || m.display_name),
+            }));
         CanvasCharts.drawHorizontalBars(iqCanvas, iqData);
     }
 
@@ -1891,17 +2076,30 @@ function renderLeaderboardCharts(leaderboard) {
     if (speedCanvas) {
         const speedData = leaderboard.filter(m => hasLeaderboardMetric(m.speed_tps)).map(m => ({
             label: (m.display_name || m.model_name).replace('Gemini ', 'G-'),
-            value: m.speed_tps
+            value: m.speed_tps,
+            color: colorForModelKey(m.model_name || m.display_name),
         })).sort((a, b) => b.value - a.value).slice(0, 14);
         CanvasCharts.drawHorizontalBars(speedCanvas, speedData);
     }
 }
 
 function formatLeaderboardPrice(item) {
-    if (!hasLeaderboardMetric(item.price_in_1m) || !hasLeaderboardMetric(item.price_out_1m)) return '—';
+    const hasApiPrice = hasLeaderboardMetric(item.price_in_1m) && hasLeaderboardMetric(item.price_out_1m);
     const cached = hasLeaderboardMetric(item.price_cached_in_1m) ? `$${item.price_cached_in_1m}` : '—';
     const estimate = item.pricing_estimated ? ` • ${leaderboardText('ước tính')}` : '';
-    return `<strong>$${item.price_in_1m}</strong><div class="leaderboard-cell-sub">cache ${cached} • out $${item.price_out_1m}${estimate}</div>`;
+    const isFast = String(item.model_name || '').toLowerCase().endsWith('(fast)');
+    const fastPriceLabel = window.UsageI18n?.language === 'en'
+        ? ' · Fast credit-equivalent' : ' · quy đổi credit Fast';
+    const apiPrice = hasApiPrice
+        ? `<strong>${isFast ? '~' : ''}$${item.price_in_1m}</strong><div class="leaderboard-cell-sub">cache ${cached} • out $${item.price_out_1m}${estimate}${isFast ? fastPriceLabel : ''}</div>`
+        : '<span class="leaderboard-na">—</span>';
+    const creditSource = item.codex_credit_rate_source_url === 'https://learn.chatgpt.com/docs/pricing'
+        ? ` <a href="${item.codex_credit_rate_source_url}" target="_blank" rel="noopener noreferrer">↗</a>`
+        : '';
+    const credits = hasLeaderboardMetric(item.codex_credit_in_1m)
+        ? `<div class="leaderboard-cell-sub" title="${escapeHtml(isFast ? 'Fast credit rates derived from the official Standard rates and the documented Fast multiplier.' : leaderboardText('Credit Codex chính thức · tốc độ Standard; khác credit chuẩn hóa trong biểu đồ chi phí'))}">${isFast ? 'Codex credit Fast' : escapeHtml(leaderboardText('Codex credit Standard'))}: ${item.codex_credit_in_1m} / ${item.codex_credit_cached_in_1m} / ${item.codex_credit_out_1m}${creditSource}</div>`
+        : '';
+    return `${apiPrice}${credits}`;
 }
 
 function formatLocalQuota(item) {
@@ -1954,11 +2152,14 @@ function renderLeaderboardTable(leaderboard) {
         const provClass = item.provider.toLowerCase().includes('openai') ? 'provider-openai' : 'provider-google';
         const statusText = leaderboardText(item.benchmark_status === 'estimate'
             ? 'AA ước tính'
-            : (item.benchmark_status === 'measured' ? 'AA đo độc lập' : 'AA chưa công bố'));
+            : (item.benchmark_status === 'measured' ? 'AA đo độc lập'
+                : (item.benchmark_status === 'published' ? 'AA công bố' : 'AA chưa công bố')));
         const statusClass = item.benchmark_status === 'estimate'
             ? 'aa-estimate'
-            : (item.benchmark_status === 'measured' ? 'aa-measured' : 'aa-unavailable');
-        const selectableBadge = item.selectable_in_codex ? `<span class="aa-status aa-selectable">${escapeHtml(leaderboardText('có thể chọn'))}</span>` : '';
+            : (item.benchmark_status === 'measured' || item.benchmark_status === 'published' ? 'aa-measured' : 'aa-unavailable');
+        const selectableBadge = item.selectable_in_codex
+            ? `<span class="aa-status aa-selectable">${escapeHtml(leaderboardText('có thể chọn'))}</span>`
+            : (item.observed_locally ? `<span class="aa-status aa-selectable">${escapeHtml(leaderboardText('đã thấy trong log'))}</span>` : '');
         const priorBadge = item.generation_status === 'previous' ? `<span class="aa-status aa-previous">${escapeHtml(leaderboardText('đời trước'))}</span>` : '';
         const sourceLine = item.benchmark_source_url
             ? `<a class="leaderboard-source-link" href="${escapeHtml(item.benchmark_source_url)}" target="_blank" rel="noopener">AA v${escapeHtml(item.benchmark_index_version || '4.3.2')} • ${escapeHtml(item.benchmark_as_of || '')}</a>`
@@ -1966,7 +2167,7 @@ function renderLeaderboardTable(leaderboard) {
                 ? `<a class="leaderboard-source-link" href="${escapeHtml(item.metadata_source_url)}" target="_blank" rel="noopener">${escapeHtml(item.metadata_source || leaderboardText('Nguồn nhà cung cấp'))}</a> • ${escapeHtml(leaderboardText('AA chưa chấm'))}`
                 : escapeHtml(leaderboardText('AA chưa có dữ liệu cho model này')));
         const costTask = hasLeaderboardMetric(item.cost_per_task)
-            ? `<strong>$${Number(item.cost_per_task).toFixed(2)}</strong><div class="leaderboard-cell-sub">${leaderboardMetric(item.value_score)} IQ/$</div>`
+            ? `<strong>${formatAACostPerTask(item.cost_per_task)}</strong><div class="leaderboard-cell-sub">${leaderboardMetric(item.value_score)} IQ/$</div>`
             : `<span class="leaderboard-na">${escapeHtml(leaderboardText('AA chưa công bố'))}</span>`;
         const localCost = item.local_cost_known === false ? leaderboardText('chưa định giá đủ') : `$${Number(item.local_cost_usd || 0).toFixed(2)}`;
         const decisionLabel = leaderboardText(item.decision_label || (item.selectable_in_codex ? 'Có thể chọn trong Codex' : (item.generation_status === 'previous' ? 'Dữ liệu lịch sử' : item.badge)));
@@ -2085,23 +2286,25 @@ let liveClockInterval = null;
 
 // Helper: Format exact reset time and countdown (Supports Full Reset vs First Partial Batch)
 function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeeklyCapped, weeklyResetAtIso) {
+    const english = window.UsageI18n?.language === 'en';
+    const locale = english ? 'en-US' : 'vi-VN';
     if (isWeeklyCapped) {
         if (weeklyResetAtIso) {
             try {
                 const wdt = new Date(weeklyResetAtIso);
-                const dateStr = wdt.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                const timeStr = wdt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-                return `⛔ Khóa theo Tuần (Mở: ${dateStr} ${timeStr})`;
+                const dateStr = wdt.toLocaleDateString(locale, { weekday: 'short', day: '2-digit', month: '2-digit' });
+                const timeStr = wdt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
+                return english ? `⛔ Weekly limit (opens: ${dateStr} ${timeStr})` : `⛔ Khóa theo Tuần (Mở: ${dateStr} ${timeStr})`;
             } catch {}
         }
-        return '⛔ Khóa do hết Hạn Mức Tuần (0%)';
+        return english ? '⛔ Weekly quota depleted (0%)' : '⛔ Khóa do hết Hạn Mức Tuần (0%)';
     }
 
-    if (isFull) return '🟢 Đã đầy 100% (Tối ưu)';
+    if (isFull) return english ? '🟢 Fully recovered (100%)' : '🟢 Đã đầy 100% (Tối ưu)';
 
     if (!resetsAtIso && !nextBatchIso) {
-        if (fallbackMin && fallbackMin > 0) return `Sau ~${fallbackMin} phút`;
-        return '🟢 Đã đầy 100%';
+        if (fallbackMin && fallbackMin > 0) return english ? `In ~${fallbackMin} minutes` : `Sau ~${fallbackMin} phút`;
+        return english ? '🟢 Fully recovered (100%)' : '🟢 Đã đầy 100%';
     }
 
     try {
@@ -2114,7 +2317,7 @@ function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeek
         const diffMs = targetDt - now;
 
         if (diffMs <= 0) {
-            return '⚡ Đang hồi phục token...';
+            return english ? '⚡ Recovering quota...' : '⚡ Đang hồi phục token...';
         }
 
         const totalSec = Math.floor(diffMs / 1000);
@@ -2124,45 +2327,48 @@ function formatResetClock(resetsAtIso, nextBatchIso, fallbackMin, isFull, isWeek
 
         let countdownStr = '';
         if (hours > 0) {
-            countdownStr = `${hours}h ${mins.toString().padStart(2, '0')}p ${secs.toString().padStart(2, '0')}s`;
+            countdownStr = `${hours}h ${mins.toString().padStart(2, '0')}${english ? 'm' : 'p'} ${secs.toString().padStart(2, '0')}s`;
         } else {
-            countdownStr = `${mins}p ${secs.toString().padStart(2, '0')}s`;
+            countdownStr = `${mins}${english ? 'm' : 'p'} ${secs.toString().padStart(2, '0')}s`;
         }
 
-        const timeStr = targetDt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const timeStr = targetDt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
         // If there's an earlier partial batch recovery
         if (batchDt && fullDt && batchDt.getTime() < fullDt.getTime() && (batchDt - now) > 0) {
             const batchSec = Math.floor((batchDt - now) / 1000);
             const bMin = Math.floor(batchSec / 60);
             const bSec = batchSec % 60;
-            return `${timeStr} (Còn ~${countdownStr} • Đợt đầu: ~${bMin}p ${bSec}s)`;
+            return english ? `${timeStr} (~${countdownStr} remaining • first batch: ~${bMin}m ${bSec}s)` : `${timeStr} (Còn ~${countdownStr} • Đợt đầu: ~${bMin}p ${bSec}s)`;
         }
 
-        return `${timeStr} (Còn ~${countdownStr})`;
+        return english ? `${timeStr} (~${countdownStr} remaining)` : `${timeStr} (Còn ~${countdownStr})`;
     } catch {
-        return `Sau ~${fallbackMin} phút`;
+        return english ? `In ~${fallbackMin} minutes` : `Sau ~${fallbackMin} phút`;
     }
 }
 
 // Helper: Format weekly reset time and countdown
 function formatWeeklyResetClock(resetsAtIso, fallbackHours, isFull) {
-    if (isFull) return '🟢 Đã sẵn sàng 100%';
+    const english = window.UsageI18n?.language === 'en';
+    const ready = english ? '🟢 Ready (100%)' : '🟢 Đã sẵn sàng 100%';
+    if (isFull) return ready;
     if (!resetsAtIso) {
         if (fallbackHours && fallbackHours > 0) {
             const d = Math.floor(fallbackHours / 24);
             const h = Math.round(fallbackHours % 24);
-            return d > 0 ? `Sau ~${d} ngày ${h}h` : `Sau ~${h} giờ`;
+            return d > 0 ? (english ? `In ~${d} days ${h}h` : `Sau ~${d} ngày ${h}h`) : (english ? `In ~${h} hours` : `Sau ~${h} giờ`);
         }
-        return '🟢 Đã sẵn sàng 100%';
+        return ready;
     }
     try {
         const dt = new Date(resetsAtIso);
-        const dateStr = dt.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' });
-        const timeStr = dt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        const locale = english ? 'en-US' : 'vi-VN';
+        const dateStr = dt.toLocaleDateString(locale, { weekday: 'short', day: '2-digit', month: '2-digit' });
+        const timeStr = dt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
         const now = new Date();
         const diffMs = dt - now;
-        if (diffMs <= 0) return '⚡ Đang reset tuần...';
+        if (diffMs <= 0) return english ? '⚡ Weekly reset in progress...' : '⚡ Đang reset tuần...';
 
         const totalSec = Math.floor(diffMs / 1000);
         const d = Math.floor(totalSec / 86400);
@@ -2172,16 +2378,16 @@ function formatWeeklyResetClock(resetsAtIso, fallbackHours, isFull) {
 
         let countdownStr = '';
         if (d > 0) {
-            countdownStr = `${d} ngày ${h}h ${m}p`;
+            countdownStr = english ? `${d} days ${h}h ${m}m` : `${d} ngày ${h}h ${m}p`;
         } else if (h > 0) {
-            countdownStr = `${h}h ${m}p ${s}s`;
+            countdownStr = `${h}h ${m}${english ? 'm' : 'p'} ${s}s`;
         } else {
-            countdownStr = `${m}p ${s}s`;
+            countdownStr = `${m}${english ? 'm' : 'p'} ${s}s`;
         }
 
-        return `${dateStr} ${timeStr} (Còn ~${countdownStr})`;
+        return english ? `${dateStr} ${timeStr} (~${countdownStr} remaining)` : `${dateStr} ${timeStr} (Còn ~${countdownStr})`;
     } catch {
-        return `Sau ~${fallbackHours} giờ`;
+        return english ? `In ~${fallbackHours} hours` : `Sau ~${fallbackHours} giờ`;
     }
 }
 
@@ -2271,7 +2477,9 @@ function renderQuotaSourceSummary(sourceBreakdowns) {
         const g5Toks = Number(s.gemini_5h_tokens || 0);
         const gwToks = Number(s.gemini_weekly_tokens || 0);
         const totalToks = Number(s.total_tokens || 0);
-        const unitLabel = s.token_unit ? 'token thực từ report' : 'token ước lượng';
+        const unitLabel = window.UsageI18n?.language === 'en'
+            ? (s.token_unit ? 'measured report tokens' : 'estimated tokens')
+            : (s.token_unit ? 'token thực từ report' : 'token ước lượng');
         const key = escapeHtml(s.key || 'source');
         const label = escapeHtml(s.label || key);
 
@@ -2505,6 +2713,184 @@ function renderQuotas(quotas, sourceBreakdowns = null) {
 }
 
 // ---- Live Codex Rate Limits Rendering Engine ----
+function drawCodexWeeklyCapacity(canvas, points, windowDays) {
+    const chart = CanvasCharts.initCanvas(canvas);
+    if (!chart) return;
+    const { ctx, width, height } = chart;
+    ctx.clearRect(0, 0, width, height);
+    const pad = { top: 20, right: 24, bottom: 40, left: 72 };
+    const chartW = Math.max(1, width - pad.left - pad.right);
+    const chartH = Math.max(1, height - pad.top - pad.bottom);
+    const values = points.flatMap(point => [
+        Number(point.full_week_usd), Number(point.recent?.[windowDays]?.median_usd),
+        Number(point.cumulative_median_usd)
+    ]).filter(value => Number.isFinite(value) && value > 0);
+    canvas.onmousemove = null;
+    if (!values.length) return;
+    const maxVal = Math.max(...values) * 1.12;
+    ctx.font = '500 10px "JetBrains Mono", monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'right';
+    for (let i = 0; i <= 4; i++) {
+        const value = maxVal * i / 4;
+        const y = pad.top + chartH * (1 - i / 4);
+        ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+        ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + chartW, y); ctx.stroke();
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(`$${formatNumber(Math.round(value))}`, pad.left - 8, y);
+    }
+    const xAt = index => pad.left + chartW * (points.length === 1 ? 0.5 : index / (points.length - 1));
+    const labelStep = Math.max(1, Math.ceil(points.length / 6));
+    points.forEach((point, index) => {
+        if (index % labelStep !== 0 && index !== points.length - 1) return;
+        const date = new Date(point.observed_at);
+        const label = `${date.getDate()}/${date.getMonth() + 1}/${String(date.getFullYear()).slice(2)}`;
+        ctx.fillStyle = '#94a3b8'; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+        ctx.fillText(label, xAt(index), pad.top + chartH + 8);
+    });
+    const drawLine = (getValue, color, dashed) => {
+        ctx.beginPath();
+        points.forEach((point, index) => {
+            const value = Number(getValue(point));
+            const x = xAt(index);
+            const y = pad.top + chartH * (1 - value / maxVal);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.setLineDash(dashed ? [5, 5] : []);
+        ctx.strokeStyle = color; ctx.lineWidth = dashed ? 1.5 : 2.5; ctx.stroke();
+        ctx.setLineDash([]);
+    };
+    drawLine(point => point.cumulative_median_usd, THEME.purple, true);
+    drawLine(point => point.recent?.[windowDays]?.median_usd, THEME.cyan, false);
+    points.forEach((point, index) => {
+        const value = Number(point.full_week_usd);
+        const x = xAt(index);
+        const y = pad.top + chartH * (1 - value / maxVal);
+        ctx.fillStyle = THEME.amber;
+        ctx.beginPath(); ctx.arc(x, y, points.length > 150 ? 2 : 3, 0, Math.PI * 2); ctx.fill();
+    });
+    canvas.onmousemove = event => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const index = points.length === 1 ? 0 : Math.max(0, Math.min(points.length - 1,
+            Math.round((x - pad.left) / chartW * (points.length - 1))));
+        const point = points[index];
+        if (!point) return;
+        canvas.title = `${point.observed_at}\n${point.model_key}\n${point.quota_delta_pct}% quota • ${formatNumber(point.token_delta)} tokens\nEstimated cost equivalent: $${point.api_cost_delta_usd} → $${point.full_week_usd} / week`;
+    };
+}
+
+function renderCodexWeeklyCapacity(codexUsage) {
+    const history = codexUsage?.automatic_model_usage?.weekly_capacity_history;
+    const identityEvents = codexUsage?.automatic_model_usage?.quota_identity_events || [];
+    const canvas = document.getElementById('canvas-codex-weekly-capacity');
+    const accountSelect = document.getElementById('codex-weekly-capacity-account');
+    const windowSelect = document.getElementById('codex-weekly-capacity-window');
+    const rangeSelect = document.getElementById('codex-weekly-capacity-range');
+    const status = document.getElementById('codex-weekly-capacity-status');
+    const note = document.getElementById('codex-weekly-capacity-note');
+    const eventsBox = document.getElementById('codex-weekly-capacity-events');
+    if (!canvas || !accountSelect || !windowSelect || !rangeSelect || !status) return;
+    const en = document.documentElement.lang === 'en';
+    const allPoints = Array.isArray(history?.points) ? history.points : [];
+    const currentAccount = codexUsage?.rate_limits?.account_id || null;
+    const accountCounts = history?.account_sample_counts || {};
+    const accountIds = [...new Set([
+        ...Object.keys(accountCounts).filter(id => id !== '__unknown__'),
+        ...identityEvents.map(event => event.account_id).filter(Boolean),
+        currentAccount
+    ].filter(Boolean))].sort();
+    const accountLabel = id => id === '__unknown__' ?
+        (en ? 'Unattributed history' : 'Lịch sử chưa rõ tài khoản') :
+        `${en ? 'Account' : 'Tài khoản'} …${id.slice(-8)}${id === currentAccount ? (en ? ' (signed in)' : ' (đang đăng nhập)') : ''}`;
+    const choices = [
+        ...(accountCounts.__unknown__ ? ['__unknown__'] : []),
+        ...accountIds
+    ];
+    const fallbackAccount = accountCounts.__unknown__ ? '__unknown__' : (currentAccount || choices[0]);
+    const selectedAccount = savedChoice('codexWeeklyCapacityAccount', choices, fallbackAccount);
+    accountSelect.replaceChildren(...choices.map(id => new Option(
+        `${accountLabel(id)} (${accountCounts[id] || 0})`, id
+    )));
+    if (selectedAccount) accountSelect.value = selectedAccount;
+    const accountPoints = allPoints.filter(point => (point.account_id || '__unknown__') === selectedAccount);
+    const windowDays = savedChoice('codexWeeklyCapacityWindow', ['7', '14', '30'], '14');
+    const range = savedChoice('codexWeeklyCapacityRange', ['30', '90', '180', '365'], '90');
+    windowSelect.value = windowDays;
+    rangeSelect.value = range;
+    if (!accountPoints.length) {
+        const chart = CanvasCharts.initCanvas(canvas);
+        chart?.ctx.clearRect(0, 0, chart.width, chart.height);
+        status.textContent = en ? 'Not enough weekly quota observations for this account yet.' : 'Chưa đủ phép đo hạn mức tuần cho tài khoản này.';
+        if (note) note.textContent = en ? 'Only nearby live quota snapshots can identify an account; older logs remain unattributed.' :
+            'Chỉ phép đo khớp với bản chụp hạn mức trực tiếp gần thời điểm đó mới được gắn tài khoản; log cũ vẫn chưa rõ tài khoản.';
+        renderCodexWeeklyCapacityEvents(eventsBox, identityEvents, selectedAccount, accountLabel, en);
+        return;
+    }
+    const cutoff = Date.now() - Number(range) * 86400000;
+    const points = accountPoints.filter(point => Date.parse(point.observed_at) >= cutoff);
+    drawCodexWeeklyCapacity(canvas, points, windowDays);
+    const latest = points.at(-1);
+    if (!latest) {
+        status.textContent = en ? 'No comparable measurements in this period.' :
+            'Chưa có phép đo trong khoảng này.';
+    } else {
+        const recentNow = accountPoints.filter(point => Date.parse(point.observed_at) >= Date.now() - Number(windowDays) * 86400000);
+        const recentMedian = recentNow.length ? [...recentNow].map(point => Number(point.full_week_usd)).sort((a, b) => a - b) : [];
+        const middle = Math.floor(recentMedian.length / 2);
+        const current = recentMedian.length ? (recentMedian.length % 2 ? recentMedian[middle] :
+            (recentMedian[middle - 1] + recentMedian[middle]) / 2) : null;
+        const sessionCount = new Set(recentNow.map(point => point.session).filter(Boolean)).size;
+        const quotaSpan = recentNow.reduce((sum, point) => sum + (Number(point.quota_delta_pct) || 0), 0);
+        const confidence = recentNow.length >= 5 && sessionCount >= 3 && quotaSpan >= 30 ?
+            (en ? 'high confidence' : 'độ tin cậy cao') :
+            recentNow.length >= 3 && sessionCount >= 2 && quotaSpan >= 10 ?
+                (en ? 'medium confidence' : 'độ tin cậy trung bình') :
+                (en ? 'low confidence' : 'độ tin cậy thấp');
+        const recentText = current === null ? (en ? `no measurements in the last ${windowDays} days` : `không có phép đo trong ${windowDays} ngày qua`) :
+            (en ? `${windowDays}-day median $${current.toFixed(2)} (${recentNow.length} measurements, ${confidence})` :
+                `trung vị ${windowDays} ngày gần đây $${current.toFixed(2)} (${recentNow.length} phép đo, ${confidence})`);
+        status.textContent = en ? `Latest individual estimate ${new Date(latest.observed_at).toLocaleString()}: $${Number(latest.full_week_usd).toFixed(2)} per full week • ${recentText} • cumulative median $${Number(latest.cumulative_median_usd).toFixed(2)}` :
+            `Lần đo cuối ${new Date(latest.observed_at).toLocaleString()}: $${Number(latest.full_week_usd).toFixed(2)} cho 100% hạn mức tuần • ${recentText} • trung vị hội tụ $${Number(latest.cumulative_median_usd).toFixed(2)}`;
+    }
+    if (note) note.textContent = en ?
+        `Showing ${points.length}/${accountPoints.length} intervals for ${accountLabel(selectedAccount)}. X-axis: measurement sequence. USD is an estimated cost equivalent, not official quota or credit. Fast uses the ChatGPT credit multiplier. Concurrent sessions and rounded percentages can distort estimates; old logs have no account ID.` :
+        `Đang hiện ${points.length}/${accountPoints.length} khoảng đo của ${accountLabel(selectedAccount)}. Trục ngang: thứ tự lần đo. USD là chi phí quy đổi ước tính, không phải hạn mức chính thức hay credit. Fast dùng hệ số credit ChatGPT. Phiên song song và % làm tròn có thể gây lệch; log cũ không có ID tài khoản.`;
+    renderCodexWeeklyCapacityEvents(eventsBox, identityEvents, selectedAccount, accountLabel, en);
+}
+
+function renderCodexWeeklyCapacityEvents(box, events, accountId, accountLabel, en) {
+    if (!box) return;
+    const labels = {
+        account_switch_observed: en ? 'Account switch confirmed' : 'Đã xác nhận đổi tài khoản',
+        scheduled_weekly_reset_observed: en ? 'Scheduled weekly reset observed' : 'Đã quan sát reset tuần đúng lịch',
+        early_weekly_reset_unverified: en ? 'Early reset; cause unverified' : 'Reset sớm; chưa rõ nguyên nhân',
+        cycle_change_after_gap: en ? 'Cycle changed during a data gap' : 'Chu kỳ đổi trong lúc thiếu dữ liệu',
+        weekly_state_change_unverified: en ? 'Weekly state changed; cause unverified' : 'Trạng thái tuần đổi; chưa rõ nguyên nhân'
+    };
+    const visible = (Array.isArray(events) ? events : [])
+        .filter(event => accountId === '__unknown__' || event.account_id === accountId)
+        .slice(-6).reverse();
+    const heading = document.createElement('div');
+    heading.textContent = en ? 'Recent account / reset evidence:' : 'Dấu vết đổi tài khoản / reset gần đây:';
+    box.replaceChildren(heading);
+    if (!visible.length) {
+        const line = document.createElement('div');
+        line.textContent = en ? 'No directly observed transitions yet.' : 'Chưa có chuyển tiếp được quan sát trực tiếp.';
+        box.append(line);
+    }
+    visible.forEach(event => {
+        const line = document.createElement('div');
+        line.textContent = `${new Date(event.observed_at).toLocaleString()} · ${labels[event.kind] || event.kind} · ${accountLabel(event.account_id)}`;
+        box.append(line);
+    });
+    const explanation = document.createElement('div');
+    explanation.textContent = en ? 'An early reset alone cannot prove a global OpenAI reset; confirmation requires provider evidence.' :
+        'Reset sớm tự nó chưa chứng minh là global reset của OpenAI; cần đối chiếu nguồn công bố.';
+    box.append(explanation);
+}
+
 function renderCodexRateLimits(codexUsage) {
     const container = document.getElementById('codex-rate-limit-cards');
     const freshnessBox = document.getElementById('codex-freshness-box');
@@ -2535,12 +2921,14 @@ function renderCodexRateLimits(codexUsage) {
         freshnessLabel.innerHTML = `Nguồn: <strong>${sourceLabel}</strong> • Ghi nhận: <strong>${obsTime}</strong>${fallbackNote}`;
     }
 
-    const planBadge = rateLimits.plan_type ? `<span class="brand-badge brand-codex" style="text-transform:uppercase;font-size:0.68rem;font-weight:700;">Gói: ${escapeHtml(rateLimits.plan_type)}</span>` : '';
+    const planBadge = rateLimits.plan_type ? `<span class="brand-badge brand-codex" style="text-transform:uppercase;font-size:0.68rem;font-weight:700;">${window.UsageI18n?.language === 'en' ? 'Plan' : 'Gói'}: ${escapeHtml(rateLimits.plan_type)}</span>` : '';
 
     container.innerHTML = rateLimits.windows.map((w, idx) => {
         const remPct = (w.remaining_percent !== undefined && w.remaining_percent !== null) ? Number(w.remaining_percent).toFixed(1) : '100.0';
         const usedPct = (w.used_percent !== undefined && w.used_percent !== null) ? Number(w.used_percent).toFixed(1) : '0.0';
-        const durationText = w.label || (w.window_minutes >= 60 ? `Khung ${w.window_minutes / 60} Giờ` : `Khung ${w.window_minutes} Phút`);
+        const durationText = window.UsageI18n?.language === 'en'
+            ? (w.window_minutes >= 60 ? `${w.window_minutes / 60}-Hour Window` : `${w.window_minutes}-Minute Window`)
+            : (w.label || (w.window_minutes >= 60 ? `Khung ${w.window_minutes / 60} Giờ` : `Khung ${w.window_minutes} Phút`));
         const clockId = `codex-window-reset-clock-${idx}`;
 
         let statusClass = 'pill-info';
@@ -2861,7 +3249,7 @@ function renderAccountManager(currentAcc, accountsManager) {
     // Quota Tab Active Account Card
     setElementText('quota-user-name', currentAcc.name || 'Người dùng');
     setElementText('quota-user-email', currentAcc.email || 'Chưa xác định');
-    setElementText('quota-user-tier', `Gói: ${currentAcc.tier || 'Not detected'}`);
+    setElementText('quota-user-tier', `${window.UsageI18n?.language === 'en' ? 'Plan' : 'Gói'}: ${currentAcc.tier || 'Not detected'}`);
     setElementText('quota-account-status', currentAcc.is_logged_in ? 'Đang Đăng Nhập (Active)' : 'Not connected');
     const quotaAvatar = document.getElementById('quota-user-avatar');
     if (quotaAvatar && currentAcc.profile_pic) {
@@ -3054,6 +3442,8 @@ let currentTaskOutcomeReviewFilter = savedChoice('taskOutcomeReviewFilter', ['al
 let currentTaskOutcomeAuditReasonFilter = typeof uiPreferences.taskOutcomeAuditReasonFilter === 'string'
     ? uiPreferences.taskOutcomeAuditReasonFilter
     : 'all';
+let currentTaskDurationRange = savedChoice('taskDurationRange', ['30', '90', '180'], '90');
+let currentTaskDurationWindow = savedChoice('taskDurationWindow', ['7', '14', '30'], '14');
 
 function renderModelsBreakdown(breakdown, codexUsage, modelsDailyTimeline) {
     renderModelsSummaryCards(breakdown, codexUsage);
@@ -3097,6 +3487,7 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     const note = document.getElementById('codex-quota-timeline-note');
     const status = document.getElementById('codex-quota-timeline-status');
     if (!canvas || !body || !legend) return;
+    const english = window.UsageI18n?.language === 'en';
 
     const windowData = data?.windows?.[currentCodexQuotaTimelineWindow];
     const allDates = Array.isArray(data?.dates) ? data.dates : [];
@@ -3124,22 +3515,24 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     ));
 
     if (!data?.available || !windowData?.available || !rows.length) {
-        body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa có khoảng đo quota 5h hợp lệ trong phạm vi đang xem.</td></tr>';
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${english ? 'No valid 5h quota intervals in this range.' : 'Chưa có khoảng đo quota 5h hợp lệ trong phạm vi đang xem.'}</td></tr>`;
         legend.innerHTML = '';
-        if (status) status.textContent = 'Dữ liệu model vẫn được giữ riêng; so sánh với Sol High chỉ hiện khi có mốc trực tiếp hoặc bắc cầu đủ bằng chứng.';
+        if (status) status.textContent = english
+            ? 'Model measurements remain separate; the Sol High comparison appears only with direct or sufficiently supported bridged evidence.'
+            : 'Dữ liệu model vẫn được giữ riêng; so sánh với Sol High chỉ hiện khi có mốc trực tiếp hoặc bắc cầu đủ bằng chứng.';
         const c = CanvasCharts.initCanvas(canvas);
         if (c) c.ctx.clearRect(0, 0, c.width, c.height);
         return;
     }
 
-    const modelKeys = [...rows.map(row => row.model_key)].sort();
-    const colorFor = modelKey => THEME.palette[Math.max(0, modelKeys.indexOf(modelKey)) % THEME.palette.length];
+    const colorFor = colorForModelKey;
     legend.innerHTML = [
-        `<button type="button" data-quota-model="all" class="${currentCodexQuotaTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">Tất cả (${rows.length})</button>`,
+        `<button type="button" data-quota-model="all" class="${currentCodexQuotaTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">${english ? 'All' : 'Tất cả'} (${rows.length})</button>`,
         ...rows.map(row => {
             const color = colorFor(row.model_key);
             const active = currentCodexQuotaTimelineSelection !== null && currentCodexQuotaTimelineSelection.has(row.model_key);
-            return `<button type="button" data-quota-model="${escapeHtml(row.model_key)}" class="${active ? 'active' : ''}" style="--quota-color:${color}"><span class="quota-timeline-swatch"></span>${escapeHtml(row.model_key)}</button>`;
+            const labelColor = currentCodexQuotaTimelineSelection === null || active ? color : '#cbd5e1';
+            return `<button type="button" data-quota-model="${escapeHtml(row.model_key)}" class="${active ? 'active' : ''}" style="--quota-color:${color};color:${labelColor}"><span class="quota-timeline-swatch"></span>${escapeHtml(row.model_key)}</button>`;
         }),
     ].join('');
     legend.querySelectorAll('button[data-quota-model]').forEach(button => {
@@ -3163,7 +3556,7 @@ function renderCodexQuotaEfficiencyTimeline(data) {
     CanvasCharts.drawQuotaRatioTimeline(canvas, dates.map(quotaTimelineDateLabel), datasets);
 
     const generatedAt = Date.parse(data.generated_at || '');
-    const confidenceLabel = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+    const confidenceLabel = english ? { low: 'Low', medium: 'Medium', high: 'High' } : { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
     body.innerHTML = rows.map(row => {
         const latest = row.latest || {};
         const previous = row.previous || {};
@@ -3180,22 +3573,22 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         const stale = Number.isFinite(ageHours) && ageHours > windowDays * 24;
         const confidenceKey = ['low', 'medium', 'high'].includes(latest.confidence) ? latest.confidence : 'low';
         const confidence = confidenceLabel[confidenceKey];
-        const modelConfidence = confidenceLabel[latest.model_confidence] || 'Thấp';
-        const baselineConfidence = confidenceLabel[latest.baseline_confidence] || 'Thấp';
+        const modelConfidence = confidenceLabel[latest.model_confidence] || confidenceLabel.low;
+        const baselineConfidence = confidenceLabel[latest.baseline_confidence] || confidenceLabel.low;
         const baselineSource = latest.baseline_source || 'unavailable';
         const bridgePath = Array.isArray(latest.bridge_path) ? latest.bridge_path : [];
         const bridgeText = bridgePath.length > 1 ? bridgePath.join(' → ') : '';
         const comparisonBadge = baselineSource === 'bridge'
-            ? '<span class="task-cell-meta">ước lượng bắc cầu</span>'
-            : (baselineSource === 'unavailable' ? '<span class="task-cell-meta">chưa có mốc Sol High</span>' : '');
+            ? `<span class="task-cell-meta">${english ? 'bridged estimate' : 'ước lượng bắc cầu'}</span>`
+            : (baselineSource === 'unavailable' ? `<span class="task-cell-meta">${english ? 'no Sol High baseline' : 'chưa có mốc Sol High'}</span>` : '');
         const baselineSamplesText = baselineSource === 'bridge'
-            ? `ước lượng từ ${formatNumber(Number(latest.baseline_estimate_anchor_count || 0))} mốc`
+            ? (english ? `estimated from ${formatNumber(Number(latest.baseline_estimate_anchor_count || 0))} anchors` : `ước lượng từ ${formatNumber(Number(latest.baseline_estimate_anchor_count || 0))} mốc`)
             : formatNumber(Number(latest.baseline_sample_count || 0));
         const confidenceTitle = baselineSource === 'bridge'
-            ? `Model: ${modelConfidence} · mốc Sol High: ${baselineConfidence} (bắc cầu${bridgeText ? ` ${bridgeText}` : ''}, support ${Number(latest.bridge_support || 0)})`
+            ? (english ? `Model: ${modelConfidence} · Sol High baseline: ${baselineConfidence} (bridged${bridgeText ? ` ${bridgeText}` : ''}, support ${Number(latest.bridge_support || 0)})` : `Model: ${modelConfidence} · mốc Sol High: ${baselineConfidence} (bắc cầu${bridgeText ? ` ${bridgeText}` : ''}, support ${Number(latest.bridge_support || 0)})`)
             : (baselineSource === 'direct'
-                ? `Model: ${modelConfidence} · Sol High trực tiếp: ${baselineConfidence}`
-                : `Model: ${modelConfidence} · chưa có mốc Sol High đủ bằng chứng`);
+                ? (english ? `Model: ${modelConfidence} · direct Sol High: ${baselineConfidence}` : `Model: ${modelConfidence} · Sol High trực tiếp: ${baselineConfidence}`)
+                : (english ? `Model: ${modelConfidence} · insufficient Sol High baseline evidence` : `Model: ${modelConfidence} · chưa có mốc Sol High đủ bằng chứng`));
         return `<tr>
             <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
             <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(latestValue) ? latestValue.toFixed(2) + '×' : '—'}</strong>${comparisonBadge}</td>
@@ -3204,7 +3597,7 @@ function renderCodexQuotaEfficiencyTimeline(data) {
             <td class="num">${Number.isFinite(tokensPerPct) ? formatNumber(Math.round(tokensPerPct)) : '—'}</td>
             <td class="num">${formatNumber(Number(latest.sample_count || 0))} / ${escapeHtml(baselineSamplesText)}</td>
             <td title="${escapeHtml(confidenceTitle)}"><span class="quota-confidence-${confidenceKey}">${escapeHtml(confidence)}</span></td>
-            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? '<span class="quota-recent-stale"> · dữ liệu cũ</span>' : ''}</td>
+            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? `<span class="quota-recent-stale"> · ${english ? 'stale' : 'dữ liệu cũ'}</span>` : ''}</td>
         </tr>`;
     }).join('');
 
@@ -3212,10 +3605,14 @@ function renderCodexQuotaEfficiencyTimeline(data) {
         const visiblePoints = rows.reduce((sum, row) => sum + row.points.length, 0);
         const bridgePoints = rows.reduce((sum, row) => sum + row.points.filter(point => point.baseline_source === 'bridge').length, 0);
         const unavailablePoints = rows.reduce((sum, row) => sum + row.points.filter(point => point.baseline_source === 'unavailable').length, 0);
-        status.textContent = `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm model · ${formatNumber(bridgePoints)} điểm bắc cầu · ${formatNumber(unavailablePoints)} điểm chưa có mốc.`;
+        status.textContent = english
+            ? `${rangeDays}-day range · ${windowDays}-day rolling median · ${formatNumber(Number(data.interval_count || 0))} valid intervals · ${formatNumber(visiblePoints)} model points · ${formatNumber(bridgePoints)} bridged points · ${formatNumber(unavailablePoints)} points without baseline.`
+            : `${rangeDays} ngày · median trượt ${windowDays} ngày · ${formatNumber(Number(data.interval_count || 0))} khoảng đo hợp lệ · ${formatNumber(visiblePoints)} điểm model · ${formatNumber(bridgePoints)} điểm bắc cầu · ${formatNumber(unavailablePoints)} điểm chưa có mốc.`;
     }
     if (note) {
-        note.textContent = 'Mỗi điểm luôn giữ median quota-efficiency riêng của model. Sol High cùng cửa sổ được ưu tiên làm mốc trực tiếp; khi thiếu, tracker chỉ bắc cầu qua quan hệ model đã từng đo chồng lấp trong lịch sử và hạ độ tin cậy. Nếu không có đường bắc cầu đủ bằng chứng, tỷ lệ để trống thay vì ép thành 0. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Đây không phải trọng số chính thức của OpenAI.';
+        note.textContent = english
+            ? 'Each point keeps the model’s own median quota efficiency. Sol High in the same window is the preferred direct baseline; otherwise the tracker uses only historically overlapping model measurements and lowers confidence. Without enough bridging evidence, the ratio stays blank rather than becoming zero. >1× means faster 5h quota consumption for the same raw token count. This is not an official OpenAI weight.'
+            : 'Mỗi điểm luôn giữ median quota-efficiency riêng của model. Sol High cùng cửa sổ được ưu tiên làm mốc trực tiếp; khi thiếu, tracker chỉ bắc cầu qua quan hệ model đã từng đo chồng lấp trong lịch sử và hạ độ tin cậy. Nếu không có đường bắc cầu đủ bằng chứng, tỷ lệ để trống thay vì ép thành 0. >1× nghĩa là model tiêu hao quota 5h nhanh hơn trên cùng raw token. Đây không phải trọng số chính thức của OpenAI.';
     }
 }
 
@@ -3242,6 +3639,7 @@ function renderCodexQuotaPerTaskTimeline(data) {
     const note = document.getElementById('codex-task-timeline-note');
     const status = document.getElementById('codex-task-timeline-status');
     if (!canvas || !body || !legend) return;
+    const english = window.UsageI18n?.language === 'en';
 
     const windowData = data?.windows?.[currentCodexTaskTimelineWindow];
     const allDates = Array.isArray(data?.dates) ? data.dates : [];
@@ -3267,24 +3665,26 @@ function renderCodexQuotaPerTaskTimeline(data) {
     ));
 
     if (!data?.available || !windowData?.available || !rows.length) {
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">Chưa đủ ít nhất ${formatNumber(minimumTasks)} task của model và Sol High trong cùng cửa sổ để so sánh.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted,#94a3b8);padding:1.15rem;">${english ? `Fewer than ${formatNumber(minimumTasks)} tasks for both the model and Sol High in the same window.` : `Chưa đủ ít nhất ${formatNumber(minimumTasks)} task của model và Sol High trong cùng cửa sổ để so sánh.`}</td></tr>`;
         legend.innerHTML = '';
         if (status) {
-            status.textContent = `Đã có ${formatNumber(Number(data?.task_sample_count || 0))} task hợp lệ; mỗi điểm cần tối thiểu ${formatNumber(minimumTasks)} task của model và ${formatNumber(minimumTasks)} task Sol High trong cùng cửa sổ.`;
+            status.textContent = english
+                ? `${formatNumber(Number(data?.task_sample_count || 0))} valid tasks recorded; each point needs at least ${formatNumber(minimumTasks)} model tasks and ${formatNumber(minimumTasks)} Sol High tasks in the same window.`
+                : `Đã có ${formatNumber(Number(data?.task_sample_count || 0))} task hợp lệ; mỗi điểm cần tối thiểu ${formatNumber(minimumTasks)} task của model và ${formatNumber(minimumTasks)} task Sol High trong cùng cửa sổ.`;
         }
         const c = CanvasCharts.initCanvas(canvas);
         if (c) c.ctx.clearRect(0, 0, c.width, c.height);
         return;
     }
 
-    const modelKeys = [...rows.map(row => row.model_key)].sort();
-    const colorFor = modelKey => THEME.palette[Math.max(0, modelKeys.indexOf(modelKey)) % THEME.palette.length];
+    const colorFor = colorForModelKey;
     legend.innerHTML = [
-        `<button type="button" data-task-quota-model="all" class="${currentCodexTaskTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">Tất cả (${rows.length})</button>`,
+        `<button type="button" data-task-quota-model="all" class="${currentCodexTaskTimelineSelection === null ? 'active' : ''}" style="--quota-color:${THEME.cyan}">${english ? 'All' : 'Tất cả'} (${rows.length})</button>`,
         ...rows.map(row => {
             const color = colorFor(row.model_key);
             const active = currentCodexTaskTimelineSelection !== null && currentCodexTaskTimelineSelection.has(row.model_key);
-            return `<button type="button" data-task-quota-model="${escapeHtml(row.model_key)}" class="${active ? 'active' : ''}" style="--quota-color:${color}"><span class="quota-timeline-swatch"></span>${escapeHtml(row.model_key)}</button>`;
+            const labelColor = currentCodexTaskTimelineSelection === null || active ? color : '#cbd5e1';
+            return `<button type="button" data-task-quota-model="${escapeHtml(row.model_key)}" class="${active ? 'active' : ''}" style="--quota-color:${color};color:${labelColor}"><span class="quota-timeline-swatch"></span>${escapeHtml(row.model_key)}</button>`;
         }),
     ].join('');
     legend.querySelectorAll('button[data-task-quota-model]').forEach(button => {
@@ -3304,7 +3704,7 @@ function renderCodexQuotaPerTaskTimeline(data) {
     });
     CanvasCharts.drawQuotaRatioTimeline(canvas, dates.map(quotaTimelineDateLabel), datasets);
 
-    const confidenceLabel = { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
+    const confidenceLabel = english ? { low: 'Low', medium: 'Medium', high: 'High' } : { low: 'Thấp', medium: 'Vừa', high: 'Cao' };
     const generatedAt = Date.parse(data.generated_at || '');
     body.innerHTML = rows.map(row => {
         const latest = row.latest || {};
@@ -3320,7 +3720,7 @@ function renderCodexQuotaPerTaskTimeline(data) {
         const observedAt = latest.last_observed_at;
         const ageHours = Number.isFinite(generatedAt) && observedAt ? (generatedAt - Date.parse(observedAt)) / 3600000 : NaN;
         const stale = Number.isFinite(ageHours) && ageHours > windowDays * 24;
-        const confidence = confidenceLabel[latest.confidence] || 'Thấp';
+        const confidence = confidenceLabel[latest.confidence] || confidenceLabel.low;
         return `<tr>
             <td style="font-weight:600;color:#e2e8f0;">${escapeHtml(row.model_key || row.model_id || 'Unknown')}</td>
             <td class="num"><strong style="color:${colorFor(row.model_key)};">${Number.isFinite(estimated) ? estimated.toFixed(2) + '%' : '—'}</strong></td>
@@ -3330,16 +3730,20 @@ function renderCodexQuotaPerTaskTimeline(data) {
             <td class="num">${Number.isFinite(tokensPerTask) ? formatNumber(Math.round(tokensPerTask)) : '—'}</td>
             <td class="num">${formatNumber(Number(latest.task_count || 0))} / ${formatNumber(Number(latest.baseline_task_count || 0))}</td>
             <td>${Number.isFinite(coverage) ? (coverage * 100).toFixed(0) + '%' : '—'} · ${escapeHtml(confidence)}</td>
-            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? '<span class="quota-recent-stale"> · dữ liệu cũ</span>' : ''}</td>
+            <td>${observedAt ? formatDate(observedAt) : '—'}${stale ? `<span class="quota-recent-stale"> · ${english ? 'stale' : 'dữ liệu cũ'}</span>` : ''}</td>
         </tr>`;
     }).join('');
 
     if (status) {
         const visiblePoints = rows.reduce((sum, row) => sum + row.points.length, 0);
-        status.textContent = `${rangeDays} ngày · median trượt ${windowDays} ngày · tối thiểu ${minimumTasks} task mỗi bên · ${formatNumber(Number(data.task_sample_count || 0))} task hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh.`;
+        status.textContent = english
+            ? `${rangeDays}-day range · ${windowDays}-day rolling median · ${rows.length} models meet the ${minimumTasks}-task threshold for both model and Sol High · ${formatNumber(Number(data.task_sample_count || 0))} valid tasks · ${formatNumber(visiblePoints)} comparison points.`
+            : `${rangeDays} ngày · median trượt ${windowDays} ngày · ${rows.length} model đạt ngưỡng ${minimumTasks} task của cả model và Sol High trong cùng cửa sổ · ${formatNumber(Number(data.task_sample_count || 0))} task hợp lệ · ${formatNumber(visiblePoints)} điểm so sánh.`;
     }
     if (note) {
-        note.textContent = 'Mỗi điểm dùng median %5h/task của các task hoàn tất gần đó và so với Sol High trong cùng cửa sổ. >1× nghĩa là model tiêu hao nhiều quota hơn cho một task gần đây. Tokens/task và số mẫu giúp nhận ra khi độ khó hoặc kích thước task thay đổi. Đây là số đo thực nghiệm từ log cục bộ.';
+        note.textContent = english
+            ? 'Each point uses the median 5h quota percentage per recently completed task and compares it with Sol High in the same window. >1× means more quota consumed per recent task. Tokens per task and sample counts help reveal changes in task size or difficulty. These are empirical measurements from local logs.'
+            : 'Mỗi điểm dùng median %5h/task của các task hoàn tất gần đó và so với Sol High trong cùng cửa sổ. >1× nghĩa là model tiêu hao nhiều quota hơn cho một task gần đây. Tokens/task và số mẫu giúp nhận ra khi độ khó hoặc kích thước task thay đổi. Đây là số đo thực nghiệm từ log cục bộ.';
     }
 }
 
@@ -3407,7 +3811,9 @@ function renderCodexQuotaEfficiency(quotaEfficiency) {
     if (note) {
         const observations = Number(quotaEfficiency.observation_count || 0);
         const intervals = Number(quotaEfficiency.interval_count || 0);
-        note.textContent = `Đo thực nghiệm từ log Codex cục bộ: ${formatNumber(observations)} snapshot, ${formatNumber(intervals)} khoảng đo hợp lệ. >1× nghĩa là model tiêu hao hạn mức 5h nhanh hơn Sol High trên cùng số raw token. Đây không phải công thức trọng số chính thức của OpenAI.`;
+        note.textContent = window.UsageI18n?.language === 'en'
+            ? `Empirical measurements from local Codex logs: ${formatNumber(observations)} snapshots and ${formatNumber(intervals)} valid intervals. >1× means faster 5h quota consumption than Sol High for the same raw token count. This is not an official OpenAI weighting formula.`
+            : `Đo thực nghiệm từ log Codex cục bộ: ${formatNumber(observations)} snapshot, ${formatNumber(intervals)} khoảng đo hợp lệ. >1× nghĩa là model tiêu hao hạn mức 5h nhanh hơn Sol High trên cùng số raw token. Đây không phải công thức trọng số chính thức của OpenAI.`;
     }
 }
 
@@ -3457,7 +3863,9 @@ function renderCodexQuotaPerTask(data) {
         const reset = Number(data.excluded_cross_cycle_tasks || 0);
         const insufficient = Number(data.excluded_insufficient_tasks || 0);
         const lowCoverage = Number(data.excluded_low_coverage_tasks || 0);
-        note.textContent = `Đo thực nghiệm từ ${formatNumber(sampled)} task hoàn tất. %5h/task được ngoại suy theo độ phủ token; đã loại ${formatNumber(mixed)} task đổi model, ${formatNumber(reset)} task qua mốc reset, ${formatNumber(insufficient)} task thiếu biến động/snapshot và ${formatNumber(lowCoverage)} task có coverage thấp. Đây không phải công thức chính thức của OpenAI.`;
+        note.textContent = window.UsageI18n?.language === 'en'
+            ? `Empirical measurements from ${formatNumber(sampled)} completed tasks. 5h quota percentage per task is extrapolated from token coverage; excluded ${formatNumber(mixed)} model-switching tasks, ${formatNumber(reset)} reset-crossing tasks, ${formatNumber(insufficient)} tasks without sufficient quota changes or snapshots, and ${formatNumber(lowCoverage)} low-coverage tasks. This is not an official OpenAI formula.`
+            : `Đo thực nghiệm từ ${formatNumber(sampled)} task hoàn tất. %5h/task được ngoại suy theo độ phủ token; đã loại ${formatNumber(mixed)} task đổi model, ${formatNumber(reset)} task qua mốc reset, ${formatNumber(insufficient)} task thiếu biến động/snapshot và ${formatNumber(lowCoverage)} task có coverage thấp. Đây không phải công thức chính thức của OpenAI.`;
     }
 }
 
@@ -3532,7 +3940,10 @@ function sizeModelTimelineStage(scrollId, stageId, bucketCount) {
 
 function formatTimelineRangeText(timelineData) {
     const range = timelineData?.range || {};
-    const granularityLabel = MODEL_TIMELINE_GRANULARITY_LABELS[currentModelTimelineGranularity] || 'Theo ngày';
+    const english = window.UsageI18n?.language === 'en';
+    const granularityLabel = english
+        ? ({ day: 'By day', month: 'By month', year: 'By year' }[currentModelTimelineGranularity] || 'By day')
+        : (MODEL_TIMELINE_GRANULARITY_LABELS[currentModelTimelineGranularity] || 'Theo ngày');
     if (range.mode === 'custom' && range.start_date && range.end_date) {
         const formatDateKey = key => {
             const parts = String(key).split('-');
@@ -3540,7 +3951,8 @@ function formatTimelineRangeText(timelineData) {
         };
         return `(${formatDateKey(range.start_date)} – ${formatDateKey(range.end_date)} · ${granularityLabel})`;
     }
-    return `(${range.days || timelineData?.dates?.length || 0} ngày qua · ${granularityLabel})`;
+    const count = range.days || timelineData?.dates?.length || 0;
+    return english ? `(Last ${count} days · ${granularityLabel})` : `(${count} ngày qua · ${granularityLabel})`;
 }
 
 function renderModelsDailyChart(timelineData) {
@@ -3558,15 +3970,15 @@ function renderModelsDailyChart(timelineData) {
         const allModels = timelineData.models;
         let legendHtml = `
             <button class="legend-btn ${currentModelTimelineSelection === null ? 'active' : ''}" onclick="filterModelDailyChart('all')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${currentModelTimelineSelection === null ? 'var(--cyan-400)' : 'rgba(255,255,255,0.1)'};background:${currentModelTimelineSelection === null ? 'rgba(6,182,212,0.15)' : 'transparent'};color:${currentModelTimelineSelection === null ? '#06b6d4' : 'var(--text-muted)'};transition:all 0.2s;">
-                Tất cả (${allModels.length})
+                ${window.UsageI18n?.language === 'en' ? 'All' : 'Tất cả'} (${allModels.length})
             </button>
         `;
         allModels.forEach(m => {
             const isActive = currentModelTimelineSelection !== null && currentModelTimelineSelection.has(m.name);
             const color = m.color || '#06b6d4';
             legendHtml += `
-                <button class="legend-btn ${isActive ? 'active' : ''}" onclick="filterModelDailyChart('${escapeHtml(m.name).replace(/'/g, "\'")}')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${isActive ? color : 'rgba(255,255,255,0.08)'};background:${isActive ? color + '22' : 'transparent'};color:${isActive ? color : '#cbd5e1'};display:flex;align-items:center;gap:6px;transition:all 0.2s;">
-                    <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};box-shadow:0 0 6px ${color};"></span>
+                <button class="legend-btn ${isActive ? 'active' : ''}" onclick="filterModelDailyChart('${escapeHtml(m.name).replace(/'/g, "\'")}')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${isActive ? color : 'rgba(255,255,255,0.08)'};background:${isActive ? color + '22' : 'transparent'};color:${currentModelTimelineSelection === null || isActive ? color : '#cbd5e1'};display:flex;align-items:center;gap:6px;transition:all 0.2s;">
+                    <span style="display:inline-block;width:11px;height:11px;flex:0 0 11px;border-radius:3px;background:${color};border:1px solid rgba(255,255,255,0.35);box-shadow:0 0 6px ${color};"></span>
                     <span>${escapeHtml(m.name)}</span>
                     <span style="font-size:0.72rem;opacity:0.8;font-family:monospace;">(${formatNumber(m.total_period_tokens)})</span>
                 </button>
@@ -3578,6 +3990,8 @@ function renderModelsDailyChart(timelineData) {
     sizeModelTimelineStage('models-daily-chart-scroll', 'models-daily-chart-stage', displayTimeline.dates.length);
     CanvasCharts.drawMultiModelDailyStackedBar(canvas, displayTimeline, currentModelTimelineSelection === null ? 'all' : currentModelTimelineSelection, {
         axisCanvas: document.getElementById('canvas-models-daily-stacked-axis'),
+        tooltipValueLabel: () => window.UsageI18n?.language === 'en' ? 'Tokens consumed' : 'Token tiêu thụ',
+        tooltipFormatter: value => `${Math.round(value).toLocaleString(window.UsageI18n?.language === 'en' ? 'en-US' : 'vi-VN')} token`,
     });
 }
 
@@ -3603,25 +4017,34 @@ function renderModelsCostChart(timelineData) {
 
     const allModels = timelineData.models;
     const unknownModels = allModels.filter(m => !m.cost_complete && Number(m.total_period_tokens || 0) > 0);
-    const proxyModels = allModels.filter(m => m.pricing_estimated === true && Number(m.total_period_tokens || 0) > 0);
+    const proxyModels = allModels.filter(m => m.pricing_source === 'assumed_equivalent' && Number(m.total_period_tokens || 0) > 0);
+    const fastModels = allModels.filter(m => m.pricing_source === 'chatgpt_fast_credit_equivalent' && Number(m.total_period_tokens || 0) > 0);
     if (coverageLabel) {
+        const english = window.UsageI18n?.language === 'en';
         const coverageParts = [];
         if (proxyModels.length) {
-            coverageParts.push(`${proxyModels.length} model dùng proxy giá GPT-5.6 Sol Thinking`);
+            coverageParts.push(english
+                ? `${proxyModels.length} models use GPT-5.6 Sol Thinking proxy pricing`
+                : `${proxyModels.length} model dùng proxy giá GPT-5.6 Sol Thinking`);
         }
+        if (fastModels.length) coverageParts.push(english
+            ? `${fastModels.length} Fast models use credit-weighted Standard rates`
+            : `${fastModels.length} model Fast dùng mức credit quy đổi từ Standard`);
         if (unknownModels.length) {
-            coverageParts.push(`${unknownModels.length} model có usage chưa định giá; phần đó không được tính thành $0`);
+            coverageParts.push(english
+                ? `${unknownModels.length} models have unpriced usage; it is not counted as $0`
+                : `${unknownModels.length} model có usage chưa định giá; phần đó không được tính thành $0`);
         }
         coverageLabel.textContent = coverageParts.length
             ? coverageParts.join(' • ') + '.'
-            : 'Toàn bộ usage trong khoảng đang có giá ước tính.';
+            : (english ? 'All usage in this range has an estimated rate.' : 'Toàn bộ usage trong khoảng đang có giá ước tính.');
         coverageLabel.style.color = unknownModels.length ? '#fbbf24' : '#86efac';
     }
 
     if (legendContainer) {
         let legendHtml = `
             <button class="legend-btn ${currentModelTimelineSelection === null ? 'active' : ''}" onclick="filterModelDailyChart('all')" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${currentModelTimelineSelection === null ? 'var(--cyan-400)' : 'rgba(255,255,255,0.1)'};background:${currentModelTimelineSelection === null ? 'rgba(6,182,212,0.15)' : 'transparent'};color:${currentModelTimelineSelection === null ? '#06b6d4' : 'var(--text-muted)'};transition:all 0.2s;">
-                Tất cả (${allModels.length})
+                ${window.UsageI18n?.language === 'en' ? 'All' : 'Tất cả'} (${allModels.length})
             </button>
         `;
         allModels.forEach(m => {
@@ -3637,8 +4060,8 @@ function renderModelsCostChart(timelineData) {
                 ? escapeHtml(m.pricing_note || `Ước tính theo ${m.pricing_basis_model || 'GPT-5.6 Sol Thinking'}`)
                 : '';
             legendHtml += `
-                <button class="legend-btn ${isActive ? 'active' : ''}" onclick="filterModelDailyChart('${escapeHtml(m.name).replace(/'/g, "\\'")}')" title="${pricingTitle}" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${isActive ? color : 'rgba(255,255,255,0.08)'};background:${isActive ? color + '22' : 'transparent'};color:${isActive ? color : '#cbd5e1'};display:flex;align-items:center;gap:6px;transition:all 0.2s;">
-                    <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};box-shadow:0 0 6px ${color};"></span>
+                <button class="legend-btn ${isActive ? 'active' : ''}" onclick="filterModelDailyChart('${escapeHtml(m.name).replace(/'/g, "\\'")}')" title="${pricingTitle}" style="cursor:pointer;padding:3px 10px;border-radius:6px;font-size:0.78rem;font-weight:600;border:1px solid ${isActive ? color : 'rgba(255,255,255,0.08)'};background:${isActive ? color + '22' : 'transparent'};color:${currentModelTimelineSelection === null || isActive ? color : '#cbd5e1'};display:flex;align-items:center;gap:6px;transition:all 0.2s;">
+                    <span style="display:inline-block;width:11px;height:11px;flex:0 0 11px;border-radius:3px;background:${color};border:1px solid rgba(255,255,255,0.35);box-shadow:0 0 6px ${color};"></span>
                     <span>${escapeHtml(m.name)}${estimatedMark}</span>
                     <span style="font-size:0.72rem;opacity:0.8;font-family:monospace;">(${formatModelCostDisplay(displayValue)}${incompleteMark})</span>
                 </button>
@@ -3656,6 +4079,8 @@ function renderModelsCostChart(timelineData) {
         fallbackMax: isCredit ? 0.1 : 0.001,
         axisFormatter: value => formatModelCostDisplay(value),
         totalFormatter: value => formatModelCostDisplay(value),
+        tooltipValueLabel: () => window.UsageI18n?.language === 'en' ? 'Estimated cost' : 'Chi phí ước tính',
+        tooltipFormatter: value => formatModelCostDisplay(value),
     });
 }
 
@@ -3842,11 +4267,13 @@ function initCodexTaskTimelineControls() {
 function renderModelsSummaryCards(breakdown, codexUsage) {
     const grid = document.getElementById('models-summary-grid');
     if (!grid) return;
+    const english = window.UsageI18n?.language === 'en';
 
     const totalModels = breakdown.length;
     const pricedModels = breakdown.filter(m => m.cost_known !== false);
     const unpricedModels = breakdown.filter(m => m.cost_known === false);
-    const proxyPricedModels = pricedModels.filter(m => m.pricing_estimated === true);
+    const proxyPricedModels = pricedModels.filter(m => m.pricing_source === 'assumed_equivalent');
+    const fastPricedModels = pricedModels.filter(m => m.pricing_source === 'chatgpt_fast_credit_equivalent');
     const totalCostAll = pricedModels.reduce((s, m) => s + (m.total_cost_usd || 0), 0);
     const agiModels = breakdown.filter(m => m.platform === 'Antigravity');
     const codexModels = breakdown.filter(m => m.platform === 'Codex');
@@ -3869,33 +4296,34 @@ function renderModelsSummaryCards(breakdown, codexUsage) {
         .filter(([path]) => String(path).toLowerCase().includes('archived_sessions'))
         .reduce((sum, [, count]) => sum + Number(count || 0), 0);
     const ledgerCoverage = rootCounts.length
-        ? ` • sổ cái ${activeLogCount} active + ${archivedLogCount} archived log; không lọc ngày; định giá theo rate hiện hành`
-        : ' • all-time, không lọc ngày; định giá theo rate hiện hành';
+        ? (english ? ` • ledger: ${activeLogCount} active + ${archivedLogCount} archived logs; all-time at current rates`
+            : ` • sổ cái ${activeLogCount} active + ${archivedLogCount} archived log; không lọc ngày; định giá theo rate hiện hành`)
+        : (english ? ' • all-time at current rates' : ' • all-time, không lọc ngày; định giá theo rate hiện hành');
 
     const cards = [
         {
             icon: '📊', cls: 'indigo', cardCls: 'c-indigo',
             label: 'Tổng Models Đang Theo Dõi',
             value: totalModels,
-            sub: `AGY: ${agiModels.length} • Codex: ${codexModels.length}`
+            sub: `Gemini/Antigravity: ${agiModels.length} • Codex: ${codexModels.length}`
         },
         {
             icon: '🔢', cls: 'cyan', cardCls: 'c-cyan',
             label: 'Tokens Theo Nguồn (Không Cộng Chéo)',
-            value: `<span style="display:block;">AGY estimated: ${formatNumber(agyTotalTokens)}</span><span style="display:block;">Codex exact: ${formatNumber(codexExactTokens)}</span>${codexManualModels.length ? `<span style="display:block;font-size:0.72em;">Codex manual: ${formatNumber(codexManualTokens)}</span>` : ''}`,
-            sub: 'AGY transcript-estimated • Codex exact session-log tokens • manual fallback tách riêng'
+            value: `<span style="display:block;">Gemini/Antigravity ${english ? 'estimated' : 'ước tính'}: ${formatNumber(agyTotalTokens)}</span><span style="display:block;">Codex ${english ? 'exact' : 'chính xác'}: ${formatNumber(codexExactTokens)}</span>${codexManualModels.length ? `<span style="display:block;font-size:0.72em;">Codex ${english ? 'manual' : 'thủ công'}: ${formatNumber(codexManualTokens)}</span>` : ''}`,
+            sub: english ? 'Gemini/Antigravity transcript estimate • exact Codex session-log tokens • manual fallback separate' : 'Gemini/Antigravity ước tính từ transcript • Codex chính xác từ session log • dữ liệu thủ công tách riêng'
         },
         {
             icon: '💵', cls: 'emerald', cardCls: 'c-emerald',
             label: 'Tổng Chi Phí Ước Tính (All-Time)',
             value: '$' + totalCostAll.toFixed(2),
-            sub: `AGY: $${agiModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)} • Codex: $${codexModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)}${proxyPricedModels.length ? ` • ${proxyPricedModels.length} model dùng proxy GPT-5.6 Sol Thinking` : ''}${unpricedModels.length ? ` • ${unpricedModels.length} model chưa có giá` : ''}${ledgerCoverage}`
+            sub: `Gemini/Antigravity: $${agiModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)} • Codex: $${codexModels.filter(m=>m.cost_known!==false).reduce((s,m)=>s+m.total_cost_usd,0).toFixed(2)}${proxyPricedModels.length ? (english ? ` • ${proxyPricedModels.length} models use GPT-5.6 Sol Thinking proxy pricing` : ` • ${proxyPricedModels.length} model dùng proxy GPT-5.6 Sol Thinking`) : ''}${fastPricedModels.length ? (english ? ` • ${fastPricedModels.length} Fast models use credit-weighted rates` : ` • ${fastPricedModels.length} model Fast quy đổi theo credit`) : ''}${unpricedModels.length ? (english ? ` • ${unpricedModels.length} models unpriced` : ` • ${unpricedModels.length} model chưa có giá`) : ''}${ledgerCoverage}`
         },
         {
             icon: '🏆', cls: 'amber', cardCls: 'c-amber',
             label: 'Model Tốn Nhiều Token Nhất',
             value: topModel ? topModel.model_id : '—',
-            sub: topModel ? `${formatNumber(topModel.total_tokens)} tokens • ${topModel.cost_known === false ? 'chi phí —' : (topModel.pricing_estimated === true ? '~$' : '$') + topModel.total_cost_usd.toFixed(2)}` : ''
+            sub: topModel ? `${formatNumber(topModel.total_tokens)} tokens • ${topModel.cost_known === false ? (english ? 'cost —' : 'chi phí —') : (topModel.pricing_estimated === true ? '~$' : '$') + topModel.total_cost_usd.toFixed(2)}` : ''
         }
     ];
 
@@ -3924,14 +4352,14 @@ function renderTokenCostPeriod(tokens, costUsd, costKnown, tokenColor, estimated
     const tokenValue = Math.max(0, Number(tokens) || 0);
     const costValue = Math.max(0, Number(costUsd) || 0);
     const digits = costValue >= 100 ? 2 : (costValue >= 1 ? 3 : 4);
-    const costText = costKnown === false ? 'Chi phí: —' : `${estimated ? '~' : ''}$${costValue.toFixed(digits)}`;
+    const costText = costKnown === false ? (window.UsageI18n?.language === 'en' ? 'Cost: —' : 'Chi phí: —') : `${estimated ? '~' : ''}$${costValue.toFixed(digits)}`;
     return `<strong style="display:block;color:${tokenColor};">${formatNumber(tokenValue)}</strong>` +
         `<span class="period-cost-value">${costText}</span>${pricingBasisHtml}`;
 }
 
 function renderFooterPeriodCost(costUsd, unknownCount) {
     return `<span class="period-cost-value">$${Number(costUsd || 0).toFixed(2)}</span>` +
-        (unknownCount ? `<span style="display:block;font-size:0.68rem;color:var(--text-muted);">+ ${unknownCount} chưa định giá</span>` : '');
+        (unknownCount ? `<span style="display:block;font-size:0.68rem;color:var(--text-muted);">+ ${unknownCount} ${window.UsageI18n?.language === 'en' ? 'unpriced' : 'chưa định giá'}</span>` : '');
 }
 
 function renderModelsTable(breakdown) {
@@ -3961,7 +4389,7 @@ function renderModelsTable(breakdown) {
         if (platform === 'Codex') {
             return '<span class="platform-badge platform-codex">Codex</span>';
         }
-        return '<span class="platform-badge platform-agy">AGY</span>';
+        return '<span class="platform-badge platform-agy">Gemini</span>';
     };
 
     const sourceBadge = (sourceKind, platform) => {
@@ -4005,7 +4433,7 @@ function renderModelsTable(breakdown) {
         const wkToks = m.weekly_tokens !== undefined ? m.weekly_tokens : m.total_tokens;
         const wkCost = m.weekly_cost_usd !== undefined ? m.weekly_cost_usd : m.total_cost_usd;
         const pricingBasisText = m.pricing_estimated === true
-            ? `<span title="${escapeHtml(m.pricing_note || '')}" style="display:block;font-size:0.66rem;color:#fbbf24;">~ theo ${escapeHtml(m.pricing_basis_model || 'GPT-5.6 Sol Thinking')}</span>`
+            ? `<span title="${escapeHtml(m.pricing_note || '')}" style="display:block;font-size:0.66rem;color:#fbbf24;">${m.pricing_source === 'chatgpt_fast_credit_equivalent' ? `~ Fast ×${Number(m.fast_credit_multiplier || 1).toFixed(1)} credits` : `~ theo ${escapeHtml(m.pricing_basis_model || 'GPT-5.6 Sol Thinking')}`}</span>`
             : (m.pricing_source === 'official_feature_mapping'
                 ? `<span title="${escapeHtml(m.pricing_note || '')}" style="display:block;font-size:0.66rem;color:#86efac;">theo ${escapeHtml(m.pricing_basis_model || 'GPT-5.4')} (OpenAI)</span>`
                 : '');
@@ -4069,7 +4497,7 @@ function renderModelsTable(breakdown) {
             sessions: 0, responses: 0
         });
 
-        const splitTokens = (agy, codexExact, codexManual) => `<span style="display:block;color:var(--cyan-400);">AGY est: ${formatNumber(agy)}</span><span style="display:block;color:var(--emerald-400);">Codex exact: ${formatNumber(codexExact)}</span>${codexManual ? `<span style="display:block;color:var(--text-muted);font-size:0.72rem;">Codex manual: ${formatNumber(codexManual)}</span>` : ''}`;
+        const splitTokens = (agy, codexExact, codexManual) => `<span style="display:block;color:var(--cyan-400);">Gemini ${window.UsageI18n?.language === 'en' ? 'est.' : 'ước tính'}: ${formatNumber(agy)}</span><span style="display:block;color:var(--emerald-400);">Codex ${window.UsageI18n?.language === 'en' ? 'exact' : 'chính xác'}: ${formatNumber(codexExact)}</span>${codexManual ? `<span style="display:block;color:var(--text-muted);font-size:0.72rem;">Codex ${window.UsageI18n?.language === 'en' ? 'manual' : 'thủ công'}: ${formatNumber(codexManual)}</span>` : ''}`;
 
         tfoot.innerHTML = `<tr class="tfoot-row">
             <td><strong>TỔNG CỘNG (THEO NGUỒN)</strong></td>
@@ -4552,11 +4980,119 @@ function renderCodexTaskOutcomeAudit(outcomes = cachedCodexTaskOutcomes) {
     initTableColumnResizers();
 }
 
+function formatTaskDuration(minutes) {
+    if (!Number.isFinite(minutes)) return '—';
+    return minutes >= 120 ? `${(minutes / 60).toFixed(1)} h` : `${minutes.toFixed(1)} min`;
+}
+
+function renderTaskDurationTimeline(data) {
+    const canvas = document.getElementById('canvas-task-duration');
+    const status = document.getElementById('task-duration-status');
+    const details = document.getElementById('task-duration-details');
+    if (!canvas || !status || !details) return;
+    const english = window.UsageI18n?.language === 'en';
+    const days = Number(currentTaskDurationRange);
+    const windowDays = Number(currentTaskDurationWindow);
+    const points = (data?.windows?.[String(windowDays)]?.points || []).slice(-days);
+    const c = CanvasCharts.initCanvas(canvas);
+    if (!c) return;
+    const { ctx, width, height } = c;
+    ctx.clearRect(0, 0, width, height);
+    const valid = points.filter(point => Number.isFinite(point.mean_minutes) && point.task_count > 0);
+    if (!valid.length) {
+        status.textContent = english
+            ? 'No accepted Codex tasks with completed-turn timestamps in this range.'
+            : 'Chưa có nhiệm vụ Codex đã hoàn tất với mốc thời gian xử lý hợp lệ trong phạm vi này.';
+        details.textContent = '';
+        return;
+    }
+
+    const pad = { top: 22, right: 24, bottom: 42, left: 66 };
+    const chartW = Math.max(1, width - pad.left - pad.right);
+    const chartH = Math.max(1, height - pad.top - pad.bottom);
+    const maxValue = Math.max(...valid.map(point => point.mean_minutes)) * 1.15 || 1;
+    ctx.font = '500 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let tick = 0; tick <= 4; tick++) {
+        const value = maxValue * tick / 4;
+        const y = pad.top + chartH * (1 - tick / 4);
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(pad.left + chartW, y);
+        ctx.stroke();
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(formatTaskDuration(value), pad.left - 8, y);
+    }
+    const xFor = index => pad.left + (points.length <= 1 ? chartW / 2 : index * chartW / (points.length - 1));
+    const yFor = minutes => pad.top + chartH * (1 - minutes / maxValue);
+    let drawing = false;
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = THEME.cyan;
+    ctx.beginPath();
+    points.forEach((point, index) => {
+        if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) {
+            drawing = false;
+            return;
+        }
+        const x = xFor(index), y = yFor(point.mean_minutes);
+        if (drawing) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
+        drawing = true;
+    });
+    ctx.stroke();
+    points.forEach((point, index) => {
+        if (!Number.isFinite(point.mean_minutes) || point.task_count <= 0) return;
+        ctx.beginPath();
+        ctx.arc(xFor(index), yFor(point.mean_minutes), 2.8, 0, Math.PI * 2);
+        ctx.fillStyle = THEME.cyan;
+        ctx.fill();
+    });
+    const labelStep = points.length > 120 ? 30 : (points.length > 60 ? 14 : 7);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    points.forEach((point, index) => {
+        if (index % labelStep !== 0 && index !== points.length - 1) return;
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(quotaTimelineDateLabel(point.date), xFor(index), pad.top + chartH + 9);
+    });
+    const latest = valid[valid.length - 1];
+    status.textContent = english
+        ? `${days}-day range · ${windowDays}-day rolling mean · ${formatNumber(Number(data.task_count || 0))} measured accepted tasks in retained history · ${formatNumber(Number(data.missing_duration_count || 0))} accepted tasks lack completed-turn times.`
+        : `Phạm vi ${days} ngày · trung bình trượt ${windowDays} ngày · ${formatNumber(Number(data.task_count || 0))} nhiệm vụ đã đạt yêu cầu có thời gian đo được trong lịch sử giữ lại · ${formatNumber(Number(data.missing_duration_count || 0))} nhiệm vụ thiếu mốc hoàn tất.`;
+    details.textContent = english
+        ? `Latest measured window (${quotaTimelineDateLabel(latest.date)}): mean ${formatTaskDuration(latest.mean_minutes)} · median ${formatTaskDuration(latest.median_minutes)} · ${formatNumber(latest.task_count)} tasks (${formatNumber(latest.reviewed_count)} manually reviewed). The mean covers observed completed-turn intervals, merges overlapping work, and excludes gaps between turns; inferred acceptances may still be included.`
+        : `Cửa sổ đo gần nhất (${quotaTimelineDateLabel(latest.date)}): trung bình ${formatTaskDuration(latest.mean_minutes)} · trung vị ${formatTaskDuration(latest.median_minutes)} · ${formatNumber(latest.task_count)} nhiệm vụ (${formatNumber(latest.reviewed_count)} đã duyệt thủ công). Trung bình tính theo các lượt xử lý có mốc hoàn tất, gộp khoảng chạy chồng lấp và bỏ khoảng chờ giữa các lượt; vẫn có thể gồm nhiệm vụ đạt yêu cầu do máy suy luận.`;
+    canvas.title = english
+        ? `Latest mean: ${formatTaskDuration(latest.mean_minutes)} across ${latest.task_count} tasks`
+        : `Trung bình gần nhất: ${formatTaskDuration(latest.mean_minutes)} trên ${latest.task_count} nhiệm vụ`;
+}
+
+function initTaskDurationControls() {
+    const range = document.getElementById('task-duration-range');
+    const window = document.getElementById('task-duration-window');
+    if (!range || !window) return;
+    range.value = currentTaskDurationRange;
+    window.value = currentTaskDurationWindow;
+    range.addEventListener('change', () => {
+        currentTaskDurationRange = ['30', '90', '180'].includes(range.value) ? range.value : '90';
+        saveUiPreferences({ taskDurationRange: currentTaskDurationRange });
+        renderTaskDurationTimeline(cachedCodexTaskOutcomes?.duration_timeline);
+    });
+    window.addEventListener('change', () => {
+        currentTaskDurationWindow = ['7', '14', '30'].includes(window.value) ? window.value : '14';
+        saveUiPreferences({ taskDurationWindow: currentTaskDurationWindow });
+        renderTaskDurationTimeline(cachedCodexTaskOutcomes?.duration_timeline);
+    });
+}
+
 function renderCodexTaskOutcomes(codexUsage) {
     const outcomes = codexUsage?.automatic_model_usage?.task_outcomes;
     if (!outcomes) return;
     cachedCodexTaskOutcomes = outcomes;
     renderCodexTaskOutcomeSummary(outcomes);
+    renderTaskDurationTimeline(outcomes.duration_timeline);
     const categoryFilter = document.getElementById('task-outcome-category-filter');
     if (categoryFilter) {
         const allowed = new Set(['all', ...(outcomes.categories || []).map(item => item.key)]);
@@ -4759,6 +5295,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Tab setup
     setupTabs();
 
+    window.addEventListener('usage-tracker:language-changed', () => {
+        if (currentData?.summary) renderAll(currentData);
+    });
+
     restoreSelectPreference('session-signal-filter', 'investigationSignalFilter');
     restoreSelectPreference('sort-select', 'investigationSort');
     restoreSelectPreference('leaderboard-sort-select', 'leaderboardSort');
@@ -4881,6 +5421,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (currentData) {
                 if (document.getElementById('tab-quota')?.classList.contains('active')) {
                     renderTimeSeriesAnalytics(currentData.summary.time_series);
+                    renderCodexWeeklyCapacity(currentData.summary.codex_usage);
                 }
                 if (enrichedLeaderboardRows.length) {
                     renderLeaderboardCharts(getFilteredLeaderboardRows());
@@ -4904,14 +5445,35 @@ document.addEventListener('DOMContentLoaded', () => {
     initTableDensityControls();
     initTableColumnResizers();
     initTimeSeriesViewControls();
+    initCodexWeeklyCapacityControls();
     initModelTimelineRangeControls();
     initModelTimelineGranularityControls();
     initModelCostControls();
     initCodexQuotaTimelineControls();
     initCodexTaskTimelineControls();
+    initTaskDurationControls();
     initCodexTaskOutcomeControls();
     loadUsageData(false).catch(() => {});
 });
+
+function initCodexWeeklyCapacityControls() {
+    const accountSelect = document.getElementById('codex-weekly-capacity-account');
+    const windowSelect = document.getElementById('codex-weekly-capacity-window');
+    const rangeSelect = document.getElementById('codex-weekly-capacity-range');
+    if (windowSelect) windowSelect.value = savedChoice('codexWeeklyCapacityWindow', ['7', '14', '30'], '14');
+    if (rangeSelect) rangeSelect.value = savedChoice('codexWeeklyCapacityRange', ['30', '90', '180', '365'], '90');
+    const choices = [
+        ['codex-weekly-capacity-account', 'codexWeeklyCapacityAccount'],
+        ['codex-weekly-capacity-window', 'codexWeeklyCapacityWindow'],
+        ['codex-weekly-capacity-range', 'codexWeeklyCapacityRange'],
+    ];
+    for (const [id, key] of choices) {
+        document.getElementById(id)?.addEventListener('change', event => {
+            saveUiPreferences({ [key]: event.target.value });
+            if (currentData) renderCodexWeeklyCapacity(currentData.summary.codex_usage);
+        });
+    }
+}
 
 function initTimeSeriesViewControls() {
     const btn5h = document.getElementById('btn-ts-view-5h');
@@ -5241,19 +5803,35 @@ function initTableSizeControls(tables = Array.from(document.querySelectorAll('ta
 
         let controls = wrapper.previousElementSibling;
         if (!controls || controls.dataset.tableSizeControlsFor !== stableId) {
+            const english = window.UsageI18n?.language === 'en';
             controls = document.createElement('details');
             controls.className = 'table-size-controls';
             controls.dataset.tableSizeControlsFor = stableId;
             controls.innerHTML = `
-                <summary title="Điều chỉnh riêng cho bảng này">Kích thước bảng</summary>
+                <summary title="${english ? 'Adjust this table' : 'Điều chỉnh riêng cho bảng này'}">${english ? 'Table size' : 'Kích thước bảng'}</summary>
                 <div class="table-size-control-panel">
-                    <label>Rộng <input type="range" data-table-size="width" min="45" max="100" step="1"><output data-table-size-output="width">Tự động</output></label>
-                    <label>Cao <input type="range" data-table-size="height" min="180" max="900" step="10"><output data-table-size-output="height">Tự động</output></label>
-                    <button type="button" data-table-size-action="reset-size">Đặt lại kích thước</button>
-                    <button type="button" data-table-size-action="reset-columns">Đặt lại độ rộng cột</button>
+                    <label><span data-table-size-label="width">${english ? 'Width' : 'Rộng'}</span> <input type="range" data-table-size="width" min="45" max="100" step="1"><output data-table-size-output="width">${english ? 'Automatic' : 'Tự động'}</output></label>
+                    <label><span data-table-size-label="height">${english ? 'Height' : 'Cao'}</span> <input type="range" data-table-size="height" min="180" max="900" step="10"><output data-table-size-output="height">${english ? 'Automatic' : 'Tự động'}</output></label>
+                    <button type="button" data-table-size-action="reset-size">${english ? 'Reset size' : 'Đặt lại kích thước'}</button>
+                    <button type="button" data-table-size-action="reset-columns">${english ? 'Reset column widths' : 'Đặt lại độ rộng cột'}</button>
                 </div>`;
             wrapper.parentNode.insertBefore(controls, wrapper);
         }
+
+        const english = window.UsageI18n?.language === 'en';
+        const sizeSummary = controls.querySelector('summary');
+        if (sizeSummary) {
+            sizeSummary.textContent = english ? 'Table size' : 'Kích thước bảng';
+            sizeSummary.title = english ? 'Adjust this table' : 'Điều chỉnh riêng cho bảng này';
+        }
+        const widthLabel = controls.querySelector('[data-table-size-label="width"]');
+        const heightLabel = controls.querySelector('[data-table-size-label="height"]');
+        if (widthLabel) widthLabel.textContent = english ? 'Width' : 'Rộng';
+        if (heightLabel) heightLabel.textContent = english ? 'Height' : 'Cao';
+        const resetSize = controls.querySelector('[data-table-size-action="reset-size"]');
+        const resetColumns = controls.querySelector('[data-table-size-action="reset-columns"]');
+        if (resetSize) resetSize.textContent = english ? 'Reset size' : 'Đặt lại kích thước';
+        if (resetColumns) resetColumns.textContent = english ? 'Reset column widths' : 'Đặt lại độ rộng cột';
 
         const widthInput = controls.querySelector('[data-table-size="width"]');
         const heightInput = controls.querySelector('[data-table-size="height"]');

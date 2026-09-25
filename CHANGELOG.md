@@ -4,6 +4,34 @@ All notable public changes to Usage Tracker will be documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-25
+
+### Added
+
+- Rolling mean of measured active completion time for accepted Codex missions, with 30/90/180-day ranges, 7/14/30-day windows, sample counts, and explicit exclusion of between-turn waiting time.
+- Four real dashboard captures in both READMEs, with explanations of weekly capacity, per-token quota efficiency, per-task quota consumption, and model token/cost trends; superseded duplicate images were removed from the README flow.
+- Distinct Codex Fast model/effort variants, such as `5.6 sol xhigh (fast)`, throughout local token, quota, task-outcome, timeline, and model-breakdown data. Fast credit-equivalent estimates use the documented ChatGPT credit multiplier and are labeled separately from API charges.
+- Codex account UUID snapshots outside the web root, conservative account attribution for new quota observations, per-account weekly-capacity chart selection, and evidence-labeled account/reset transitions. Older unattributed measurements remain separate.
+- Historical Codex weekly quota-capacity chart in API-equivalent USD, with every measured interval, cumulative convergence, and selectable 7/14/30-day recent medians. Weekly rate-limit readings are backfilled from local session logs when the model cache upgrades.
+- GPT-6 Sol and GPT-6 Luna API prices and published Codex Standard credit rates, shown separately from the tracker's normalized chart credits.
+- Read-only discovery of visible GPT and ChatGPT Web model/effort choices from the local Codex model cache on each dashboard refresh. New choices without a verified price or benchmark remain explicitly unpriced and unranked.
+- Daily background refresh of Artificial Analysis leaderboard scores, speed and cost per benchmark task through its official Free Data API when a server-side API key is configured; a last-good cache and dated offline snapshot remain available.
+- Verified GPT-6 Sol and GPT-6 Luna Artificial Analysis release results in the offline leaderboard snapshot.
+
+### Fixed
+
+- Rename the dashboard and exported reports from the Antigravity-specific AGY brand to Usage Tracker; Gemini/Antigravity remains an explicit data source next to Codex.
+- Translate dynamic quota-chart explanations, status lines, task-duration details, model summaries, reset clocks, and table controls when English is selected; switching languages rerenders live sections.
+- Make `gpt-6-sol max` orange so its legend and plotted series are visually distinct from cyan `5.6 luna xhigh`.
+- Rebuild both Codex log caches with service-tier attribution, preserve a turn's original tier when the setting changes mid-turn, and scan the complete local log ledger during migration.
+- Preserve the GPT generation in Codex log attribution, so GPT-6 Sol/Luna usage no longer falls into GPT-5.6 Sol/Luna totals. Available legacy log files are rescanned when the attribution cache upgrades.
+- Show locally observed models in the leaderboard's default scope, even if they are absent from the current picker.
+- Prevent leaderboard local tokens and cost from counting Codex automatic logs a second time when those same logs are already included in Model Breakdown.
+- Give observed model/effort combinations distinct, stable colors across token, cost, and 5-hour quota trend charts, including when chart ranges or rankings change.
+- Explain that the quota-per-task trend only plots model/effort variants with enough valid tasks for both that variant and the Sol High baseline inside the same time window.
+- Display small AA cost-per-task values without rounding them to $0.00 and calculate IQ/$ from the actual published cost rather than a hidden $0.05 floor.
+- Let the local web server accept requests immediately; dashboard analysis starts when the page requests live data instead of blocking startup beyond the launcher timeout. The first successful live scan also refreshes the offline `data.js` fallback.
+
 ## [0.3.0] - 2026-09-22
 
 ### Added

@@ -4,9 +4,13 @@
 
 **Tiếng Việt** · [English](README.en.md)
 
-Trình duyệt này dùng để theo dõi những thông số thiết thực cho việc quản lí hạn mức AI của bạn
+Ứng dụng này giúp bạn theo dõi các thông số thiết thực để quản lý hạn mức AI.
 
-> Các snapshot dưới đây là ảnh chụp trực tiếp từ Usage Tracker sau khi chạy thực tế. Một số ảnh cũ dạng demo vẫn được giữ cho các ví dụ minh họa UI đơn giản.
+> Các ảnh dưới đây là dữ liệu thực chụp ngày 25/09/2026; số liệu thay đổi theo tài khoản, model và thời điểm đo. Các mức USD là chi phí tương đương ước tính, không phải hóa đơn Codex.
+
+## Tự cập nhật Bảng Xếp Hạng Models
+
+Bảng xếp hạng kiểm tra [Artificial Analysis Data API](https://artificialanalysis.ai/data-api/docs) khi tải dữ liệu và bản chụp cũ hơn 24 giờ, rồi lưu bản hợp lệ gần nhất để vẫn xem được lúc mất mạng. Tạo key ở Artificial Analysis và đặt vào biến môi trường `ARTIFICIAL_ANALYSIS_API_KEY` của tiến trình server, hoặc lưu một dòng key trong `C:\Users\<tên người dùng>\.codex\usage-tracker-aa-api-key.txt` (nằm ngoài thư mục web). Cache được Git bỏ qua; không đưa key vào giao diện hay commit. Sau khi thêm key, khởi động lại server và tải lại trang. Nếu chưa có key, bảng dùng bản chụp AA được xác minh gần nhất và ghi rõ ngày. Model có trong bộ chọn Codex nhưng AA chưa chấm vẫn hiện là chưa có hạng; giá API/Codex được quản lý riêng, không suy ra từ điểm AA.
 
 ##  Usage Tracker này có gì đặc biệt hơn
 
@@ -29,7 +33,25 @@ Khi phân luồng qua orchestrator, executor hay subagent, mức tiêu hao đư�
 
 Các chỉ số chưa có dữ liệu sẽ hiển thị unknown, tránh việc gán mặc định bằng 0 gây sai lệch thống kê.
 
-![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
+## Các biểu đồ thực tế
+
+**Trần hạn mức Codex theo tuần.** Mỗi chấm là một lần suy luận ngân sách tuần từ chi phí tương đương và phần trăm hạn mức đã dùng. Đường gần đây phản ứng với thay đổi mới, còn đường hội tụ tổng hợp các phép đo được giữ lại. Chọn tài khoản, phạm vi và cửa sổ để tránh trộn các tài khoản khác nhau.
+
+![Biểu đồ suy luận trần hạn mức Codex theo tuần](docs/screenshots/codex-weekly-capacity-2026-09-25.png)
+
+**Hiệu suất hạn mức 5 giờ theo thời gian.** Đường của từng model so với Sol High trên cùng raw token; bảng bên dưới ghi số mẫu, độ tin cậy và liệu mốc so sánh là trực tiếp hay bắc cầu. Giá trị trên 1× nghĩa là tiêu hao hạn mức nhanh hơn, không phải thước đo chất lượng model.
+
+![Xu hướng hiệu suất hạn mức Codex 5 giờ](docs/screenshots/quota-efficiency-trend-2026-09-25.png)
+
+**Hao phí hạn mức cho mỗi task.** Biểu đồ này lấy các task hoàn tất gần đây, so với Sol High trong cùng cửa sổ và chỉ hiện model có đủ mẫu. Nó đo chi phí hoàn thành một task, khác với tốc độ tiêu hao trên một token ở biểu đồ trên.
+
+![Xu hướng hao phí hạn mức theo task](docs/screenshots/task-quota-trend-2026-09-25.png)
+
+**Token và chi phí theo model.** Hai biểu đồ cột chồng cùng dùng phạm vi và đơn vị ngày/tháng/năm; hover lên cột để xem toàn bộ model trong mốc đó. USD là giá trị ước tính, còn Fast dùng hệ số credit ChatGPT khi quy đổi.
+
+![Biểu đồ token và chi phí theo model](docs/screenshots/token-cost-trend-2026-09-25.png)
+
+Biểu đồ đường **Thời Gian Trung Bình Hoàn Thành Nhiệm Vụ** bổ sung thời gian xử lý thực đo của các lượt Codex đã hoàn tất, với phạm vi 30/90/180 ngày và cửa sổ trung bình 7/14/30 ngày. Khoảng chờ giữa các lần sửa được loại khỏi thời gian xử lý; các nhiệm vụ thiếu mốc hoàn tất không được gán thời lượng bằng 0.
 
 ## Tính năng: usage tức thời/ usage trung bình
 
@@ -40,11 +62,6 @@ Usage tức thời (current / instantaneous): Cho biết tốc độ sử dụng
 Usage trung bình (average / typical): Đóng vai trò làm mốc tham chiếu cho các loại công việc tương đương. Để hạn chế ảnh hưởng từ các trường hợp bất thường (outliers), tracker ưu tiên sử dụng trung vị (median) khi đã thu thập đủ số lượng mẫu.
 
 Việc kết hợp cả hai chỉ số giúp bạn vừa có cảnh báo sớm khi một task phát sinh chi phí bất thường, vừa có mốc nền tảng (baseline) để so sánh và lựa chọn mô hình phù hợp.
-
-<img width="1713" height="945" alt="Bảng phân tích model và chi phí sử dụng thực tế" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
-<img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
-
-
 
 ## Ma trận về độ tương quan hạn mức tiêu tốn / hoàn thành 1 task
 
@@ -132,6 +149,10 @@ Một lỗi thực tế từng gặp là tiến trình desktop không tìm thấ
 
 Từ đó dự án giữ nguyên tắc: **live app-server là nguồn có thẩm quyền khi kết nối được; fallback vẫn hữu ích nhưng phải được ghi nhãn rõ ràng**.
 
+Ở mục hạn mức Codex, biểu đồ **Trần Hạn Mức Codex Tuần Tương Đương Theo USD** lấy từng khoảng tăng của phần trăm quota tuần trong cùng phiên và cùng model/effort, tính chi phí API tương đương của token phát sinh rồi quy ra 100% tuần. Mỗi khoảng là một điểm đo; trung vị hội tụ dùng toàn bộ lịch sử còn lưu, còn trung vị gần đây dùng cửa sổ 7, 14 hoặc 30 ngày để phản ánh thay đổi mới. Trục ngang là thứ tự lần đo, có mốc ngày để đối chiếu. Đây là phép suy luận theo bảng giá API hiện có, không phải hạn mức USD hay credit chính thức; phiên đồng thời, cơ cấu model và thay đổi giá có thể ảnh hưởng kết quả.
+
+Từ các lần đo mới, tracker lưu ID tài khoản Codex dạng UUID cùng bản chụp hạn mức trực tiếp trong tệp cục bộ `~/.codex/usage-tracker-quota-identity.json` (ngoài thư mục web). Chỉ gắn ID cho log token gần thời điểm bản chụp và khớp cả mốc reset 5 giờ lẫn tuần; lịch sử cũ không đủ bằng chứng vẫn thuộc nhóm “Lịch sử chưa rõ tài khoản”. Bộ chọn tài khoản tách trung vị của từng nhóm. Dấu vết đổi ID được ghi là đổi tài khoản; chu kỳ tuần đổi sớm được ghi là reset chưa rõ nguyên nhân. Không tự gọi đó là global reset của OpenAI nếu không có bằng chứng công bố và xác nhận áp dụng cho tài khoản.
+
 
 ## “Token” trên máy không phải lúc nào cũng đến từ cùng một nguồn. Tracker có thể gặp:
 
@@ -218,7 +239,7 @@ Chúng có thể chứa account identifier, prompt, local path, usage history ho
 
 Repo public không cần và không nên chứa project riêng, prompt lịch sử cá nhân hay dữ liệu trading riêng của người dùng.
 
-Các ảnh trong `docs/screenshots/` dùng số liệu và tên task giả để minh họa UI.
+Bốn ảnh mang ngày `2026-09-25` trong `docs/screenshots/` là ảnh chụp thực tế do chủ repo cung cấp; các ảnh demo cũ dùng số liệu minh họa. Tránh đưa prompt riêng hoặc mã tài khoản đầy đủ vào ảnh public mới.
 
 ## Development và kiểm thử
 

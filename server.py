@@ -1,4 +1,5 @@
 import ctypes
+import colorsys
 import hashlib
 import http.server
 import socketserver
@@ -12,9 +13,13 @@ import base64
 import tempfile
 import threading
 import unicodedata
+import urllib.error
 import urllib.parse
 import heapq
+import bisect
 from datetime import datetime, timezone, timedelta
+
+import aa_sync
 
 
 def is_cloud_offline_file(file_path):
@@ -50,9 +55,16 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ACCOUNTS_FILE = os.path.join(BASE_DIR, 'accounts.json')
 CODEX_USAGE_FILE = os.path.join(BASE_DIR, 'codex_usage.json')
 CODEX_MODELS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_models_cache.json')
+# Account IDs are private local metadata; the web server serves BASE_DIR.
+CODEX_QUOTA_IDENTITY_FILE = os.path.expanduser(os.path.join('~', '.codex', 'usage-tracker-quota-identity.json'))
+CODEX_RUNTIME_MODELS_CACHE_FILE = os.path.expanduser(os.path.join('~', '.codex', 'models_cache.json'))
 CODEX_MISSION_TURNS_CACHE_FILE = os.path.join(BASE_DIR, 'codex_mission_turns_cache.json')
 CODEX_MISSION_REVIEWS_FILE = os.path.join(BASE_DIR, 'codex_mission_reviews.json')
-CODEX_MISSION_TURNS_CACHE_VERSION = 7
+AA_BENCHMARK_CACHE_FILE = os.path.join(BASE_DIR, 'aa_benchmarks_cache.json')
+# Keep credentials outside SimpleHTTPRequestHandler's served project root.
+AA_API_KEY_FILE = os.path.expanduser(os.path.join('~', '.codex', 'usage-tracker-aa-api-key.txt'))
+CODEX_MISSION_TURNS_CACHE_VERSION = 9
+CODEX_MODELS_CACHE_VERSION = 7
 QUOTA_OBSERVATIONS_FILE = os.path.join(BASE_DIR, 'quota_observations.json')
 REAL_QUOTAS_FILE = os.path.join(BASE_DIR, 'real_quotas.json')
 VSCDB_PATH = os.path.expanduser(os.path.join('~', 'AppData', 'Roaming', 'Antigravity IDE', 'User', 'globalStorage', 'state.vscdb'))
@@ -286,6 +298,20 @@ def _mutate_json_file(path, default, mutator):
 def _write_data_js(data):
     payload = 'const USAGE_DATA = ' + json.dumps(data, ensure_ascii=False, indent=2) + ';'
     _atomic_write_text(os.path.join(BASE_DIR, 'data.js'), payload)
+
+
+_LIVE_STATIC_SNAPSHOT_WRITTEN = False
+
+
+def _write_live_static_snapshot_once(data):
+    """Keep the offline fallback fresh after the first successful live scan."""
+    global _LIVE_STATIC_SNAPSHOT_WRITTEN
+    if _LIVE_STATIC_SNAPSHOT_WRITTEN:
+        return
+    with PERSISTENCE_LOCK:
+        if not _LIVE_STATIC_SNAPSHOT_WRITTEN:
+            _write_data_js(data)
+            _LIVE_STATIC_SNAPSHOT_WRITTEN = True
 
 
 def _serialize_persistence(func):
@@ -654,6 +680,24 @@ OPENAI_VERIFIED_PRICING = {
         'knowledge_cutoff': '2026-04-30',
         'source_url': 'https://developers.openai.com/api/docs/models/gpt-6-astra',
     },
+    'gpt-6-sol': {
+        'price_in_1m': 2.00,
+        'price_cached_in_1m': 0.20,
+        'price_out_1m': 10.00,
+        'reasoning_labels': ('none', 'low', 'standard', 'high', 'xhigh', 'max', 'ultra'),
+        'default_effort': 'medium',
+        'knowledge_cutoff': '2026-04-20',
+        'source_url': 'https://developers.openai.com/api/docs/models/gpt-6-sol',
+    },
+    'gpt-6-luna': {
+        'price_in_1m': 0.10,
+        'price_cached_in_1m': 0.01,
+        'price_out_1m': 0.50,
+        'reasoning_labels': ('none', 'low', 'standard', 'high', 'xhigh', 'max'),
+        'default_effort': 'medium',
+        'knowledge_cutoff': '2026-05-18',
+        'source_url': 'https://developers.openai.com/api/docs/models/gpt-6-luna',
+    },
     'gpt-5.5': {
         'price_in_1m': 5.00,
         'price_cached_in_1m': 0.50,
@@ -673,6 +717,33 @@ OPENAI_VERIFIED_PRICING = {
         'source_url': 'https://developers.openai.com/api/docs/models/gpt-5.4',
     },
 }
+
+# Codex subscription credits are a separate rate card from API dollar prices.
+# Published Standard-speed rates per 1M tokens, checked on 2026-09-23.
+CODEX_OFFICIAL_CREDIT_RATES = {
+    'gpt-6-astra': (250.0, 25.0, 1250.0),
+    'gpt-6-sol': (50.0, 5.0, 250.0),
+    'gpt-6-luna': (2.5, 0.25, 12.5),
+    'gpt-5.6-sol': (100.0, 10.0, 500.0),
+    'gpt-5.6-terra': (50.0, 5.0, 300.0),
+    'gpt-5.6-luna': (5.0, 0.5, 30.0),
+}
+CODEX_CREDIT_RATE_SOURCE_URL = 'https://learn.chatgpt.com/docs/pricing'
+
+
+def register_codex_credit_rates():
+    for entry in BENCHMARK_DATABASE.values():
+        rates = CODEX_OFFICIAL_CREDIT_RATES.get(entry.get('model_id'))
+        if rates:
+            entry.update({
+                'codex_credit_in_1m': rates[0],
+                'codex_credit_cached_in_1m': rates[1],
+                'codex_credit_out_1m': rates[2],
+                'codex_credit_rate_source_url': CODEX_CREDIT_RATE_SOURCE_URL,
+                'codex_credit_rate_as_of': '2026-09-23',
+                'codex_credit_rate_speed': 'standard',
+            })
+
 
 GEMINI_36_FLASH_OFFICIAL = {
     'model_id': 'gemini-3.6-flash',
@@ -805,9 +876,11 @@ register_additional_verified_pricing()
 # Exact choices exposed by the current Codex desktop runtime on this host.
 # Keep availability separate from AA coverage: a selectable model must remain
 # visible even when AA has not published a benchmark for that effort level.
-CODEX_SELECTABLE_MODELS_AS_OF = '2026-09-21'
+CODEX_SELECTABLE_MODELS_AS_OF = '2026-09-23'
 CODEX_SELECTABLE_MODEL_EFFORTS = {
     'gpt-6-astra': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    'gpt-6-sol': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
+    'gpt-6-luna': ('low', 'medium', 'high', 'xhigh', 'max'),
     'gpt-5.6-sol': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
     'gpt-5.6-terra': ('low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
     'gpt-5.6-luna': ('low', 'medium', 'high', 'xhigh', 'max'),
@@ -816,6 +889,8 @@ CODEX_SELECTABLE_MODEL_EFFORTS = {
 
 
 def _codex_catalog_key(model_id, effort):
+    if model_id.startswith('chatgpt-web/'):
+        return model_id if effort == 'medium' else f'{model_id} {effort}'
     label = 'standard' if effort == 'medium' else effort
     if model_id.startswith('gpt-5.6-'):
         return f"5.6 {model_id.removeprefix('gpt-5.6-')} {label}"
@@ -825,6 +900,8 @@ def _codex_catalog_key(model_id, effort):
 def _codex_selectable_display_name(model_id, effort):
     family_names = {
         'gpt-6-astra': 'GPT-6 Astra',
+        'gpt-6-sol': 'GPT-6 Sol',
+        'gpt-6-luna': 'GPT-6 Luna',
         'gpt-5.6-sol': 'GPT-5.6 Sol',
         'gpt-5.6-terra': 'GPT-5.6 Terra',
         'gpt-5.6-luna': 'GPT-5.6 Luna',
@@ -836,6 +913,8 @@ def _codex_selectable_display_name(model_id, effort):
 def register_codex_selectable_models():
     family_labels = {
         'gpt-6-astra': 'Astra',
+        'gpt-6-sol': 'Sol',
+        'gpt-6-luna': 'Luna',
         'gpt-5.6-sol': 'Sol',
         'gpt-5.6-terra': 'Terra',
         'gpt-5.6-luna': 'Luna',
@@ -867,6 +946,82 @@ def register_codex_selectable_models():
 
 
 register_codex_selectable_models()
+register_codex_credit_rates()
+
+
+def refresh_codex_runtime_models(cache_file=None):
+    """Add visible Codex picker choices from the local client cache, without guessing prices."""
+    path = cache_file or CODEX_RUNTIME_MODELS_CACHE_FILE
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            catalog = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return False
+    rows = catalog.get('models') if isinstance(catalog, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return False
+
+    visible = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get('visibility') != 'list':
+            continue
+        model_id = row.get('slug')
+        if not isinstance(model_id, str) or not (
+            re.fullmatch(r'gpt-\d+(?:\.\d+)?(?:-[a-z0-9]+)?', model_id) or
+            model_id in ('chatgpt-web/light', 'chatgpt-web/medium', 'chatgpt-web/high', 'chatgpt-web/extra-high')
+        ):
+            continue
+        efforts = row.get('supported_reasoning_levels')
+        if not isinstance(efforts, list):
+            continue
+        valid_efforts = []
+        for level in efforts:
+            effort = level if isinstance(level, str) else level.get('effort') if isinstance(level, dict) else None
+            if effort in ('none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'):
+                valid_efforts.append(effort)
+        if valid_efforts:
+            visible.append((model_id, row.get('display_name') or model_id, valid_efforts))
+    if not visible:
+        return False
+
+    # A successful local cache read supersedes the dated built-in fallback.
+    for entry in BENCHMARK_DATABASE.values():
+        if entry.get('availability_source') in ('Codex desktop runtime', 'Codex local model cache'):
+            entry['selectable_in_codex'] = False
+    fetched_at = str(catalog.get('fetched_at') or '')[:10] or None
+    order = 0
+    for model_id, display_name, efforts in visible:
+        for effort in efforts:
+            order += 1
+            key = _codex_catalog_key(model_id, effort)
+            entry = BENCHMARK_DATABASE.get(key)
+            if entry is None:
+                entry = _blank_priced_model_entry()
+                entry.update({
+                    'model_id': model_id,
+                    'reasoning_effort': effort,
+                    'provider': 'OpenAI (Codex)',
+                    'metadata_source': 'Codex local model cache',
+                    'price_in_1m': None,
+                    'price_cached_in_1m': None,
+                    'price_out_1m': None,
+                    'pricing_source': 'unknown',
+                    'badge': 'Chưa có bảng giá/benchmark',
+                    'best_for': 'Model mới được nhận diện từ Codex; chưa có giá hoặc benchmark đã xác minh.',
+                })
+                BENCHMARK_DATABASE[key] = entry
+            entry.update({
+                'selectable_in_codex': True,
+                'availability_source': 'Codex local model cache',
+                'availability_as_of': fetched_at,
+                'selection_order': order,
+                'display_name': (display_name if model_id.startswith('chatgpt-web/')
+                                 else f'{display_name} · {effort.capitalize()}'),
+                'family': entry.get('family') or ('ChatGPT Web' if model_id.startswith('chatgpt-web/')
+                                                 else model_id.rsplit('-', 1)[-1].capitalize()),
+            })
+    register_codex_credit_rates()
+    return True
 
 ARTIFICIAL_ANALYSIS_SOURCE = 'Artificial Analysis'
 ARTIFICIAL_ANALYSIS_INDEX_VERSION = '4.3.2'
@@ -1104,6 +1259,31 @@ ARTIFICIAL_ANALYSIS_BENCHMARKS = {
     },
 }
 
+# Public AA release pages checked on 2026-09-23. Keep these as the offline
+# snapshot until an authenticated AA Data API refresh supplies newer values.
+for family, variants in {
+    'sol': (
+        ('none', 28, 109, 0.33), ('low', 34, 129, 0.13),
+        ('standard', 40, 114, 0.25), ('high', 43, 119, 0.37),
+        ('xhigh', 44, 128, 0.53), ('max', 48, 115, 1.06),
+    ),
+    'luna': (
+        ('none', 18, 136, 0.01), ('low', 21, 176, 0.0045),
+        ('standard', 29, 143, 0.02), ('high', 32, 144, 0.03),
+        ('xhigh', 34, 153, 0.04), ('max', 37, 154, 0.07),
+    ),
+}.items():
+    for effort, intelligence, speed, cost in variants:
+        ARTIFICIAL_ANALYSIS_BENCHMARKS[f'gpt-6-{family} {effort}'] = {
+            'intelligence_index': float(intelligence),
+            'speed_tps': float(speed),
+            'cost_per_task': cost,
+            'source_url': f'https://artificialanalysis.ai/models/releases/gpt-6-{family}',
+            'benchmark_status': 'measured',
+            'benchmark_as_of': '2026-09-23',
+            'family': family.capitalize(),
+        }
+
 
 def register_artificial_analysis_benchmarks():
     """Attach only directly verified Artificial Analysis metrics to catalog rows."""
@@ -1116,7 +1296,7 @@ def register_artificial_analysis_benchmarks():
         entry.update({
             'benchmark_source': ARTIFICIAL_ANALYSIS_SOURCE,
             'benchmark_source_url': benchmark['source_url'],
-            'benchmark_as_of': ARTIFICIAL_ANALYSIS_AS_OF,
+            'benchmark_as_of': benchmark.get('benchmark_as_of', ARTIFICIAL_ANALYSIS_AS_OF),
             'benchmark_index_version': ARTIFICIAL_ANALYSIS_INDEX_VERSION,
             'benchmark_status': benchmark.get('benchmark_status', 'measured'),
             'family': benchmark.get('family'),
@@ -1136,6 +1316,13 @@ def get_verified_aa_metrics(entry):
     if entry.get('benchmark_source') != ARTIFICIAL_ANALYSIS_SOURCE:
         return {metric: None for metric in AA_LEADERBOARD_METRICS}
     return {metric: entry.get(metric) for metric in AA_LEADERBOARD_METRICS}
+
+
+def aa_value_score(intelligence_index, cost_per_task):
+    """IQ per dollar of AA benchmark-task cost, without a hidden price floor."""
+    if intelligence_index is None or cost_per_task is None or cost_per_task <= 0:
+        return None
+    return round(intelligence_index / cost_per_task, 1)
 
 
 def sort_and_assign_aa_ranks(rows):
@@ -1162,9 +1349,115 @@ def sort_and_assign_aa_ranks(rows):
 
 register_artificial_analysis_benchmarks()
 
+AA_REFRESH_LOCK = threading.Lock()
+AA_REFRESH_RUNNING = False
+AA_LAST_ERROR = None
+AA_RETRY_AFTER = None
+
+
+def _aa_api_key():
+    key = os.environ.get('ARTIFICIAL_ANALYSIS_API_KEY', '').strip()
+    if key:
+        return key
+    try:
+        with open(AA_API_KEY_FILE, 'r', encoding='utf-8') as source:
+            return source.read().strip()
+    except OSError:
+        return ''
+
+
+def _aa_cache_time(snapshot):
+    try:
+        value = datetime.fromisoformat(str(snapshot.get('fetched_at') or '').replace('Z', '+00:00'))
+        return value.astimezone(timezone.utc) if value.tzinfo else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _apply_aa_cache(snapshot):
+    """Apply only validated AA benchmark fields to existing model identities."""
+    if not isinstance(snapshot, dict) or _aa_cache_time(snapshot) is None:
+        return 0
+    rows = snapshot.get('models')
+    if not isinstance(rows, dict):
+        return 0
+    updated = 0
+    for key, benchmark in rows.items():
+        entry = BENCHMARK_DATABASE.get(key)
+        if not isinstance(entry, dict) or not isinstance(benchmark, dict):
+            continue
+        # Re-validate the disk cache; it is local state, not an authority to
+        # assign arbitrary benchmark numbers or source links.
+        intelligence = aa_sync._finite_number(benchmark.get('intelligence_index'), 100)
+        if intelligence is None:
+            continue
+        for metric, maximum in (
+            ('coding_score', 100), ('speed_tps', 2000),
+            ('ttft_sec', 1000), ('cost_per_task', 1000),
+        ):
+            entry[metric] = aa_sync._finite_number(benchmark.get(metric), maximum)
+        entry['intelligence_index'] = intelligence
+        entry['reasoning_score'] = None
+        source_url = benchmark.get('source_url')
+        entry['benchmark_source'] = ARTIFICIAL_ANALYSIS_SOURCE
+        entry['benchmark_source_url'] = (
+            source_url if isinstance(source_url, str) and
+            source_url.startswith('https://artificialanalysis.ai/')
+            else aa_sync.AA_DATA_API_DOCS_URL
+        )
+        entry['benchmark_as_of'] = snapshot['fetched_at'][:10]
+        entry['benchmark_index_version'] = str(snapshot.get('index_version') or ARTIFICIAL_ANALYSIS_INDEX_VERSION)
+        entry['benchmark_status'] = 'published'
+        updated += 1
+    return updated
+
+
+def _aa_refresh_worker(api_key):
+    global AA_REFRESH_RUNNING, AA_LAST_ERROR, AA_RETRY_AFTER
+    error = None
+    try:
+        snapshot = aa_sync.fetch_free_models(api_key)
+        _atomic_write_json(AA_BENCHMARK_CACHE_FILE, snapshot)
+    except urllib.error.HTTPError as exc:
+        error = f'HTTP {exc.code}'
+    except Exception as exc:
+        error = type(exc).__name__
+    with AA_REFRESH_LOCK:
+        AA_LAST_ERROR = error
+        AA_RETRY_AFTER = datetime.now(timezone.utc) + timedelta(hours=1) if error else None
+        AA_REFRESH_RUNNING = False
+
+
+def prepare_aa_benchmarks():
+    """Use the last good snapshot and schedule a non-blocking daily refresh."""
+    global AA_REFRESH_RUNNING
+    register_artificial_analysis_benchmarks()
+    snapshot = _read_json_file(AA_BENCHMARK_CACHE_FILE, {})
+    cached_count = _apply_aa_cache(snapshot)
+    fetched_at = _aa_cache_time(snapshot) if cached_count else None
+    now = datetime.now(timezone.utc)
+    key = _aa_api_key()
+    stale = fetched_at is None or now - fetched_at >= timedelta(hours=24)
+    with AA_REFRESH_LOCK:
+        if key and stale and not AA_REFRESH_RUNNING and (AA_RETRY_AFTER is None or now >= AA_RETRY_AFTER):
+            AA_REFRESH_RUNNING = True
+            threading.Thread(target=_aa_refresh_worker, args=(key,), daemon=True, name='aa-benchmark-refresh').start()
+        running = AA_REFRESH_RUNNING
+        error = AA_LAST_ERROR
+    return {
+        'state': ('needs_key' if not key else 'refreshing' if running else
+                  'error' if error and stale else 'current' if not stale else 'stale'),
+        'last_success_at': fetched_at.isoformat() if fetched_at else None,
+        'cached_models': cached_count,
+        'error': error if key else None,
+        'source_url': aa_sync.AA_DATA_API_DOCS_URL,
+        'snapshot_as_of': ARTIFICIAL_ANALYSIS_AS_OF,
+    }
+
 def normalize_model_lookup_name(model_name):
     """Normalize common Codex/API spellings without changing stored display names."""
-    normalized = re.sub(r'[-_/]+', ' ', str(model_name or '').strip().lower())
+    normalized = re.sub(r'\s*\(fast\)\s*$', '', str(model_name or '').strip().lower())
+    normalized = re.sub(r'[-_/]+', ' ', normalized)
     normalized = re.sub(r'\s+', ' ', normalized)
     if normalized == 'gpt 5.6':
         return '5.6 sol standard'
@@ -1174,15 +1467,51 @@ def normalize_model_lookup_name(model_name):
         normalized += ' standard'
     if normalized.startswith('5.6 '):
         normalized = re.sub(r' (medium|default)$', ' standard', normalized)
+    if re.fullmatch(r'gpt \d+(?:\.\d+)? (?:astra|sol|terra|luna)', normalized):
+        normalized += ' standard'
+    if re.match(r'gpt \d+(?:\.\d+)? (?:astra|sol|terra|luna) ', normalized):
+        normalized = re.sub(r' (medium|default)$', ' standard', normalized)
     return normalized
 
-def normalize_codex_model_effort(model_name, effort=None):
+
+def _codex_variant_lookup_name(model_name):
+    """Compare stored model identities without merging Fast into Standard."""
+    name = str(model_name or '').strip()
+    base = normalize_model_lookup_name(name)
+    return base + (' (fast)' if name.lower().endswith('(fast)') else '')
+
+def _codex_service_tier(value):
+    """Normalize Codex's older priority spelling and current Fast setting."""
+    tier = str(value or '').strip().lower()
+    if tier in ('fast', 'priority'):
+        return 'fast'
+    if tier == 'default':
+        return 'default'
+    return ''
+
+
+def _codex_fast_credit_multiplier(model_name):
+    """ChatGPT-credit multiplier, not an API Priority price."""
+    if not str(model_name or '').strip().lower().endswith('(fast)'):
+        return 1.0
+    base = normalize_model_lookup_name(model_name)
+    if base.startswith('gpt 5.4 ') or base.startswith('5.4 '):
+        return 2.0
+    if re.match(r'^(?:gpt )?(?:5\.5|5\.6|6)(?: |$)', base):
+        return 2.5
+    return 1.0
+
+
+def normalize_codex_model_effort(model_name, effort=None, service_tier=None):
     """Normalize model family and reasoning effort into a canonical compound identity.
 
     Returns (compound_key, canonical_model_id, effort_value, effort_label).
     Example: ('5.6 sol high', 'gpt-5.6-sol', 'high', 'high')
     """
     raw_m = str(model_name or '').strip().lower()
+    fast_suffix = raw_m.endswith('(fast)')
+    if fast_suffix:
+        raw_m = raw_m[:-len('(fast)')].strip()
     raw_m_clean = re.sub(r'[-_/]+', ' ', raw_m)
     raw_m_clean = re.sub(r'\s+', ' ', raw_m_clean)
 
@@ -1196,6 +1525,9 @@ def normalize_codex_model_effort(model_name, effort=None):
             break
 
     effective_effort = raw_e or extracted_effort or 'medium'
+    is_fast = _codex_service_tier(service_tier) == 'fast' or (
+        service_tier is None and fast_suffix
+    )
     if effective_effort in ('medium', 'default', 'standard', ''):
         effort_label = 'standard'
         effort_value = 'medium'
@@ -1203,18 +1535,21 @@ def normalize_codex_model_effort(model_name, effort=None):
         effort_label = effective_effort
         effort_value = effective_effort
 
-    family = None
-    if 'terra' in raw_m_clean:
-        family = 'terra'
-    elif 'luna' in raw_m_clean:
-        family = 'luna'
-    elif 'sol' in raw_m_clean or raw_m_clean in ('gpt 5.6', '5.6', 'gpt5.6', '5.6 sol'):
-        family = 'sol'
-
-    if family:
-        canonical_model_id = f'gpt-5.6-{family}'
-        compound_key = f'5.6 {family} {effort_label}'
-        return compound_key, canonical_model_id, effort_value, effort_label
+    # Match the generation explicitly. A family-only test used to attribute
+    # GPT-6 Sol/Luna log events to GPT-5.6 and contaminate both model totals.
+    family_match = re.fullmatch(
+        r'(?:gpt\s*)?(\d+(?:\.\d+)?)\s+(astra|sol|terra|luna)', raw_m_clean
+    )
+    if raw_m_clean in ('gpt 5.6', '5.6', 'gpt5.6'):
+        family_match = re.fullmatch(r'(5\.6)\s+(sol)', '5.6 sol')
+    if family_match:
+        generation, family = family_match.groups()
+        canonical_model_id = f'gpt-{generation}-{family}'
+        compound_key = (
+            f'5.6 {family} {effort_label}' if generation == '5.6'
+            else f'{canonical_model_id} {effort_label}'
+        )
+        return compound_key + (' (fast)' if is_fast else ''), canonical_model_id, effort_value, effort_label
 
     if 'o3' in raw_m_clean:
         canonical_model_id = 'o3'
@@ -1232,7 +1567,7 @@ def normalize_codex_model_effort(model_name, effort=None):
         canonical_model_id = str(model_name or 'unknown').strip()
         compound_key = f'{canonical_model_id} {effort_label}' if effort_label != 'standard' else canonical_model_id
 
-    return compound_key, canonical_model_id, effort_value, effort_label
+    return compound_key + (' (fast)' if is_fast else ''), canonical_model_id, effort_value, effort_label
 
 def get_benchmark_for_model(model_name):
     if not model_name or model_name == 'Unknown':
@@ -1296,6 +1631,10 @@ def _is_codex_auto_review_model(model_name):
 
 
 def model_has_verified_pricing(model_name):
+    if str(model_name or '').strip().lower().endswith('(fast)'):
+        # The base token rate is verified; its ChatGPT credit uplift is a
+        # separate product rule, so it is not a verified API dollar rate.
+        return False
     if _is_codex_auto_review_model(model_name):
         return True
     bm = get_benchmark_for_model(model_name)
@@ -1322,6 +1661,29 @@ def get_effective_pricing(model_name):
     the GPT-5.6 Sol family token rate as a GPT-5.6 Sol Thinking proxy, while
     remaining marked as estimated rather than verified pricing.
     """
+    if str(model_name or '').strip().lower().endswith('(fast)'):
+        base_name = str(model_name).strip()[:-len('(fast)')].strip()
+        base = get_effective_pricing(base_name)
+        multiplier = _codex_fast_credit_multiplier(model_name)
+        if base is None or multiplier == 1.0:
+            return None
+        weighted = dict(base)
+        for field in ('price_in_1m', 'price_cached_in_1m', 'price_out_1m'):
+            if weighted.get(field) is not None:
+                weighted[field] = float(weighted[field]) * multiplier
+        weighted.update({
+            'pricing_source': 'chatgpt_fast_credit_equivalent',
+            'pricing_verified': False,
+            'pricing_estimated': True,
+            'pricing_basis_model': base_name,
+            'pricing_note': (
+                f'ChatGPT Fast consumes {multiplier:g}x Standard credits. '
+                'Displayed USD is a credit-weighted estimate, not an API charge.'
+            ),
+            'fast_credit_multiplier': multiplier,
+        })
+        return weighted
+
     if _is_codex_auto_review_model(model_name):
         basis = get_benchmark_for_model(CODEX_AUTO_REVIEW_PRICING_BASIS)
         price_in = basis.get('price_in_1m')
@@ -1387,6 +1749,7 @@ def get_pricing_provenance(model_name):
             'pricing_source': 'unknown',
             'pricing_basis_model': None,
             'pricing_note': None,
+            'fast_credit_multiplier': None,
         }
     return {
         'pricing_known': True,
@@ -1395,12 +1758,13 @@ def get_pricing_provenance(model_name):
         'pricing_source': pricing.get('pricing_source'),
         'pricing_basis_model': pricing.get('pricing_basis_model'),
         'pricing_note': pricing.get('pricing_note'),
+        'fast_credit_multiplier': pricing.get('fast_credit_multiplier'),
     }
 
 
 def estimate_model_cost(model_name, input_tokens=0, output_tokens=0,
                         cached_input_tokens=0, cache_write_input_tokens=0):
-    """Return an API-equivalent estimated cost when catalog pricing is known."""
+    """Estimate Standard API-equivalent or Fast credit-weighted cost."""
     pricing = get_effective_pricing(model_name)
     if pricing is None:
         return None
@@ -3647,11 +4011,181 @@ def get_codex_rate_limits():
     """Prefer current app-server quota; keep session logs as backward-compatible fallback."""
     live = read_codex_rate_limits_app_server()
     if live and live.get('available'):
+        record_codex_quota_identity(live)
         return live
     fallback = scan_codex_rate_limits()
     if isinstance(fallback, dict):
         fallback['fallback_reason'] = 'Codex app-server rate-limit RPC unavailable'
     return fallback
+
+
+def _codex_quota_identity_snapshot(rate_limits):
+    """Keep only the opaque account ID and quota fields needed for attribution."""
+    if (not isinstance(rate_limits, dict) or
+            rate_limits.get('source') != 'codex_app_server'):
+        return None
+    account_id = rate_limits.get('account_id')
+    observed_at = _parse_iso_utc(rate_limits.get('observed_at'))
+    if not isinstance(account_id, str) or not 1 <= len(account_id) <= 128 or observed_at is None:
+        return None
+    windows = {}
+    for raw in rate_limits.get('windows') or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            duration = int(raw.get('window_minutes'))
+            pct = float(raw.get('used_percent'))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        reset = _parse_iso_utc(raw.get('resets_at'))
+        if duration in (300, 10080) and math.isfinite(pct) and 0 <= pct <= 100 and reset:
+            windows['five_hour' if duration == 300 else 'weekly'] = {
+                'used_percent': round(pct, 2), 'resets_at': reset.isoformat(),
+            }
+    if 'weekly' not in windows:
+        return None
+    return {
+        'observed_at': observed_at.isoformat(),
+        'account_id': account_id,
+        'limit_id': str(rate_limits.get('limit_id') or ''),
+        'plan_type': str(rate_limits.get('plan_type') or ''),
+        'five_hour': windows.get('five_hour'),
+        'weekly': windows['weekly'],
+        'source': 'codex_app_server',
+    }
+
+
+def load_codex_quota_identity():
+    raw = _read_json_file(CODEX_QUOTA_IDENTITY_FILE, {'version': 1, 'snapshots': []})
+    return list(raw.get('snapshots') or []) if isinstance(raw, dict) else []
+
+
+def record_codex_quota_identity(rate_limits):
+    """Persist prospective evidence; never assign the current ID to old logs."""
+    snapshot = _codex_quota_identity_snapshot(rate_limits)
+    if snapshot is None:
+        return False
+    with PERSISTENCE_LOCK:
+        rows = load_codex_quota_identity()
+        cutoff = _parse_iso_utc(snapshot['observed_at']) - timedelta(days=367)
+        rows = [row for row in rows if isinstance(row, dict) and
+                (_parse_iso_utc(row.get('observed_at')) or datetime.min.replace(tzinfo=timezone.utc)) >= cutoff]
+        last = rows[-1] if rows else None
+        if last:
+            last_at = _parse_iso_utc(last.get('observed_at'))
+            same_state = all(last.get(key) == snapshot.get(key) for key in
+                             ('account_id', 'limit_id', 'plan_type', 'five_hour', 'weekly'))
+            if last_at and (snapshot['observed_at'] == last['observed_at'] or
+                            (same_state and 0 <= (_parse_iso_utc(snapshot['observed_at']) - last_at).total_seconds() < 240)):
+                return False
+        rows.append(snapshot)
+        _atomic_write_json(CODEX_QUOTA_IDENTITY_FILE, {'version': 1, 'snapshots': rows})
+    return True
+
+
+def build_codex_quota_identity_events(snapshots):
+    """Classify observable boundaries, not an unobservable provider cause."""
+    rows = sorted((row for row in snapshots or [] if isinstance(row, dict) and
+                   _parse_iso_utc(row.get('observed_at')) and row.get('account_id')),
+                  key=lambda row: row['observed_at'])
+    events = []
+    last_by_account = {}
+    previous = None
+    for after in rows:
+        when = _parse_iso_utc(after['observed_at'])
+        if previous and after['account_id'] != previous['account_id']:
+            events.append({
+                'observed_at': after['observed_at'], 'kind': 'account_switch_observed',
+                'account_id': after['account_id'],
+                'previous_account_id': previous['account_id'],
+                'weekly_before': previous.get('weekly'), 'weekly_after': after.get('weekly'),
+                'cause_confirmed': True,
+            })
+        before = last_by_account.get(after['account_id'])
+        if before:
+            prior_when = _parse_iso_utc(before['observed_at'])
+            old_week = before.get('weekly') or {}
+            new_week = after.get('weekly') or {}
+            old_reset = _parse_iso_utc(old_week.get('resets_at'))
+            new_reset = _parse_iso_utc(new_week.get('resets_at'))
+            if old_reset and new_reset:
+                try:
+                    used_dropped = float(new_week.get('used_percent')) < float(old_week.get('used_percent')) - 0.5
+                except (TypeError, ValueError):
+                    used_dropped = False
+                reset_moved = abs((new_reset - old_reset).total_seconds()) > 180
+                if used_dropped or reset_moved:
+                    if (when - prior_when).total_seconds() > 6 * 3600:
+                        kind = 'cycle_change_after_gap'
+                    elif old_reset <= when <= old_reset + timedelta(hours=2) and new_reset > old_reset:
+                        kind = 'scheduled_weekly_reset_observed'
+                    elif when < old_reset - timedelta(minutes=5) and used_dropped and new_reset > old_reset:
+                        kind = 'early_weekly_reset_unverified'
+                    else:
+                        kind = 'weekly_state_change_unverified'
+                    events.append({
+                        'observed_at': after['observed_at'], 'kind': kind,
+                        'account_id': after['account_id'], 'previous_account_id': None,
+                        'weekly_before': old_week, 'weekly_after': new_week,
+                        'cause_confirmed': False,
+                    })
+        last_by_account[after['account_id']] = after
+        previous = after
+    return events
+
+
+def attribute_codex_quota_observations(observations, snapshots, max_gap_seconds=180):
+    """Attach an ID only when a nearby live read matches both quota windows."""
+    usable = []
+    for row in snapshots or []:
+        if not isinstance(row, dict) or not row.get('account_id'):
+            continue
+        ts = _parse_iso_utc(row.get('observed_at'))
+        weekly = _parse_iso_utc((row.get('weekly') or {}).get('resets_at'))
+        five_hour = _parse_iso_utc((row.get('five_hour') or {}).get('resets_at'))
+        try:
+            week_pct = float((row.get('weekly') or {}).get('used_percent'))
+            five_pct = float((row.get('five_hour') or {}).get('used_percent'))
+        except (TypeError, ValueError):
+            continue
+        if ts and weekly and five_hour and math.isfinite(week_pct) and math.isfinite(five_pct):
+            usable.append((ts, weekly, five_hour, row['account_id'], week_pct, five_pct))
+    usable.sort(key=lambda item: item[0])
+    times = [item[0] for item in usable]
+    attributed = []
+    for raw in observations or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        if row.get('account_id'):
+            attributed.append(row)
+            continue
+        ts = _parse_iso_utc(row.get('ts'))
+        weekly = _parse_iso_utc(row.get('weekly_resets_at'))
+        five_hour = _parse_iso_utc(row.get('resets_at'))
+        if ts and weekly and five_hour:
+            nearby = usable[
+                bisect.bisect_left(times, ts - timedelta(seconds=max_gap_seconds)):
+                bisect.bisect_right(times, ts + timedelta(seconds=max_gap_seconds))
+            ]
+            matches = set()
+            for snap_ts, snap_week, snap_five, account_id, snap_week_pct, snap_five_pct in nearby:
+                if (abs((snap_ts - ts).total_seconds()) > max_gap_seconds or
+                        abs((snap_week - weekly).total_seconds()) > 180 or
+                        abs((snap_five - five_hour).total_seconds()) > 180):
+                    continue
+                try:
+                    if (abs(float(row.get('weekly_used_percent')) - snap_week_pct) > 5 or
+                            abs(float(row.get('used_percent')) - snap_five_pct) > 10):
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                matches.add(account_id)
+            if len(matches) == 1:
+                row['account_id'] = matches.pop()
+                row['account_attribution'] = 'matched_live_quota'
+        attributed.append(row)
+    return attributed
 
 
 def _read_codex_tail_lines(file_path, max_bytes=65536, max_lines=100):
@@ -3849,7 +4383,8 @@ def scan_codex_rate_limits(sessions_dir=None, max_files=20, max_tail_bytes=65536
 
 
 def _extract_codex_5h_quota_observation(rate_limits, ts_str, current_model, current_effort,
-                                        cumulative_state, session_key, task_id=None):
+                                        cumulative_state, session_key, task_id=None,
+                                        service_tier=None):
     """Return one model-attributed 5h quota observation from a token_count event."""
     if not isinstance(rate_limits, dict) or not rate_limits or not isinstance(cumulative_state, dict):
         return None
@@ -3860,6 +4395,7 @@ def _extract_codex_5h_quota_observation(rate_limits, ts_str, current_model, curr
     if not isinstance(normalized, dict):
         return None
     five_hour_window = None
+    weekly_window = None
     for window in normalized.get('windows') or []:
         if not isinstance(window, dict):
             continue
@@ -3869,24 +4405,41 @@ def _extract_codex_5h_quota_observation(rate_limits, ts_str, current_model, curr
             continue
         if duration == 300:
             five_hour_window = window
-            break
-    if not five_hour_window:
+        elif duration == 10080:
+            weekly_window = window
+    if not five_hour_window and not weekly_window:
         return None
-    try:
-        used_pct = float(five_hour_window.get('used_percent'))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    resets_at = five_hour_window.get('resets_at')
-    reset_dt = _parse_iso_utc(resets_at)
-    if not math.isfinite(used_pct) or reset_dt is None:
-        return None
+    used_pct = None
+    reset_dt = None
+    if five_hour_window:
+        try:
+            used_pct = float(five_hour_window.get('used_percent'))
+        except (TypeError, ValueError, OverflowError):
+            pass
+        reset_dt = _parse_iso_utc(five_hour_window.get('resets_at'))
+    if used_pct is None or not math.isfinite(used_pct) or reset_dt is None:
+        used_pct = None
+        reset_dt = None
 
     total_tokens = _safe_nonnegative_int(cumulative_state.get('total_tokens'))
     if total_tokens <= 0:
         return None
     model_key, canon_model, effort_value, effort_label = normalize_codex_model_effort(
-        current_model, current_effort
+        current_model, current_effort, service_tier
     )
+    weekly_used_pct = None
+    weekly_reset_dt = None
+    if weekly_window:
+        try:
+            weekly_used_pct = float(weekly_window.get('used_percent'))
+        except (TypeError, ValueError, OverflowError):
+            pass
+        weekly_reset_dt = _parse_iso_utc(weekly_window.get('resets_at'))
+    if weekly_used_pct is None or not math.isfinite(weekly_used_pct) or weekly_reset_dt is None:
+        weekly_used_pct = None
+        weekly_reset_dt = None
+    if used_pct is None and weekly_used_pct is None:
+        return None
     return {
         'ts': ts_str,
         'session': str(session_key or ''),
@@ -3894,9 +4447,12 @@ def _extract_codex_5h_quota_observation(rate_limits, ts_str, current_model, curr
         'model_key': model_key,
         'model_id': canon_model,
         'reasoning_effort': effort_value,
+        'service_tier': _codex_service_tier(service_tier) or 'default',
         'effort_label': effort_label,
-        'used_percent': round(max(0.0, min(100.0, used_pct)), 2),
-        'resets_at': reset_dt.isoformat(),
+        'used_percent': round(max(0.0, min(100.0, used_pct)), 2) if used_pct is not None else None,
+        'resets_at': reset_dt.isoformat() if reset_dt is not None else None,
+        'weekly_used_percent': round(max(0.0, min(100.0, weekly_used_pct)), 2) if weekly_used_pct is not None else None,
+        'weekly_resets_at': weekly_reset_dt.isoformat() if weekly_reset_dt is not None else None,
         'total_tokens': total_tokens,
         'input_tokens': _safe_nonnegative_int(cumulative_state.get('input_tokens')),
         'cached_input_tokens': _safe_nonnegative_int(cumulative_state.get('cached_input_tokens')),
@@ -4220,6 +4776,142 @@ def _codex_quota_interval_confidence(samples):
     if sample_count >= 3 and session_count >= 2 and quota_span >= 10:
         return 'medium'
     return 'low'
+
+
+def build_codex_weekly_capacity_history(quota_observations, now=None, range_days=367,
+                                        min_quota_delta=1.0):
+    """Infer API-USD full-week equivalents from individual local quota changes.
+
+    Each measured interval remains visible. Recent time-bounded medians can
+    react to a policy change while the cumulative median shows convergence.
+    Neither series is an official subscription allowance.
+    """
+    now_utc = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    now_utc = now_utc.replace(tzinfo=timezone.utc) if now_utc.tzinfo is None else now_utc.astimezone(timezone.utc)
+    days = max(7, min(367, int(range_days)))
+    cutoff = now_utc - timedelta(days=days)
+    by_session = {}
+    for raw in quota_observations or []:
+        if not isinstance(raw, dict):
+            continue
+        ts = _parse_iso_utc(raw.get('ts'))
+        reset = _parse_iso_utc(raw.get('weekly_resets_at'))
+        try:
+            pct = float(raw.get('weekly_used_percent'))
+            tokens = int(raw.get('total_tokens'))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        session = str(raw.get('session') or '')
+        model = str(raw.get('model_key') or '')
+        if (not session or not model or ts is None or reset is None or
+                ts < cutoff or ts > now_utc or not math.isfinite(pct) or
+                not 0 <= pct <= 100 or tokens <= 0):
+            continue
+        by_session.setdefault(session, []).append((ts, reset, pct, tokens, model, raw))
+
+    samples = []
+    unpriced_count = 0
+    component_fields = ('input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens')
+    for session, observations in by_session.items():
+        observations.sort(key=lambda row: row[0])
+        anchor = None
+        for current in observations:
+            if anchor is None:
+                anchor = current
+                continue
+            same_cycle = abs((current[1] - anchor[1]).total_seconds()) <= 180
+            elapsed = (current[0] - anchor[0]).total_seconds()
+            current_account = str(current[5].get('account_id') or '')
+            anchor_account = str(anchor[5].get('account_id') or '')
+            if (current[4] != anchor[4] or not same_cycle or elapsed <= 0 or
+                    elapsed > 6 * 3600 or current_account != anchor_account):
+                anchor = current
+                continue
+            pct_delta = current[2] - anchor[2]
+            token_delta = current[3] - anchor[3]
+            if pct_delta < 0 or token_delta <= 0:
+                anchor = current
+                continue
+            if pct_delta < min_quota_delta:
+                continue
+            deltas = {}
+            for field in component_fields:
+                deltas[field] = max(0, _safe_nonnegative_int(current[5].get(field)) -
+                                    _safe_nonnegative_int(anchor[5].get(field)))
+            cost = estimate_model_cost(
+                current[4], input_tokens=deltas['input_tokens'],
+                cached_input_tokens=deltas['cached_input_tokens'],
+                cache_write_input_tokens=deltas['cache_write_input_tokens'],
+                output_tokens=deltas['output_tokens'],
+            )
+            if cost is None or not math.isfinite(cost) or cost <= 0:
+                unpriced_count += 1
+                anchor = current
+                continue
+            samples.append({
+                'observed_at': current[0].isoformat(),
+                'session': session,
+                'model_key': current[4],
+                'account_id': current_account or None,
+                'account_attribution': current[5].get('account_attribution') if current_account else None,
+                'quota_delta_pct': round(pct_delta, 2),
+                'token_delta': token_delta,
+                'api_cost_delta_usd': round(cost, 6),
+                'full_week_usd': round(cost * 100.0 / pct_delta, 2),
+            })
+            anchor = current
+
+    samples.sort(key=lambda row: (row['observed_at'], row['session']))
+    by_account = {}
+    for sample in samples:
+        by_account.setdefault(sample['account_id'] or '__unknown__', []).append(sample)
+    for account_samples in by_account.values():
+        sample_dates = [_parse_iso_utc(sample['observed_at']) for sample in account_samples]
+        low_half = []
+        high_half = []
+        window_starts = {7: 0, 14: 0, 30: 0}
+        for index, sample in enumerate(account_samples):
+            observed_at = sample_dates[index]
+            value = sample['full_week_usd']
+            if not low_half or value <= -low_half[0]:
+                heapq.heappush(low_half, -value)
+            else:
+                heapq.heappush(high_half, value)
+            if len(low_half) > len(high_half) + 1:
+                heapq.heappush(high_half, -heapq.heappop(low_half))
+            elif len(high_half) > len(low_half):
+                heapq.heappush(low_half, -heapq.heappop(high_half))
+            sample['cumulative_median_usd'] = round(
+                -low_half[0] if len(low_half) > len(high_half) else (-low_half[0] + high_half[0]) / 2, 2
+            )
+            sample['recent'] = {}
+            for window_days in (7, 14, 30):
+                window_start = observed_at - timedelta(days=window_days)
+                first = window_starts[window_days]
+                while first < index and sample_dates[first] <= window_start:
+                    first += 1
+                window_starts[window_days] = first
+                nearby = account_samples[first:index + 1]
+                sample['recent'][str(window_days)] = {
+                    'median_usd': round(_median_numeric(
+                        [entry['full_week_usd'] for entry in nearby]
+                    ), 2),
+                    'sample_count': len(nearby),
+                    'session_count': len({entry['session'] for entry in nearby}),
+                    'quota_span_pct': round(sum(entry['quota_delta_pct'] for entry in nearby), 2),
+                    'confidence': _codex_quota_interval_confidence(nearby),
+                }
+    return {
+        'available': bool(samples),
+        'source': 'local_codex_session_logs',
+        'basis': 'api_cost_delta_over_weekly_quota_delta',
+        'range_days': days,
+        'observation_count': sum(len(rows) for rows in by_session.values()),
+        'sample_count': len(samples),
+        'account_sample_counts': {key: len(rows) for key, rows in by_account.items()},
+        'unpriced_interval_count': unpriced_count,
+        'points': samples,
+    }
 
 
 def build_codex_quota_efficiency(quota_observations, min_quota_delta=2.0):
@@ -4999,6 +5691,7 @@ def _empty_codex_mission_turn(turn_id, timestamp=None):
         'model_key': '',
         'model_id': '',
         'reasoning_effort': '',
+        'service_tier': '',
         'cwd': '',
         'user_text': '',
         'user_messages': [],
@@ -5175,6 +5868,8 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
     if (not isinstance(cache_store, dict) or cache_store.get('version') != CODEX_MISSION_TURNS_CACHE_VERSION or
             not isinstance(cache_store.get('files'), dict)):
         cache_store = {'version': CODEX_MISSION_TURNS_CACHE_VERSION, 'files': {}}
+    else:
+        cache_store['version'] = CODEX_MISSION_TURNS_CACHE_VERSION
     cache_files = cache_store['files']
 
     candidates_by_key = {}
@@ -5244,6 +5939,7 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
         active_keys.add(key)
         cached = cache_files.get(key)
         if (_valid_codex_mission_turns_cache_entry(cached) and
+                cached.get('attribution_version') == 3 and
                 cached.get('mtime') == mtime and cached.get('size') == size and
                 cached.get('offset') == size):
             files_cached += 1
@@ -5251,6 +5947,7 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
 
         append_mode = (
             _valid_codex_mission_turns_cache_entry(cached) and
+            cached.get('attribution_version') == 3 and
             cached.get('offset', 0) <= size and cached.get('size', 0) <= size
         )
         if append_mode:
@@ -5262,6 +5959,8 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
             current_task_id = str(cached.get('current_task_id') or '')
             current_model = cached.get('current_model')
             current_effort = cached.get('current_effort')
+            pending_service_tier = cached.get('pending_service_tier') or 'default'
+            current_service_tier = cached.get('current_service_tier') or pending_service_tier
             current_cwd = str(cached.get('current_cwd') or '')
         else:
             start_offset = 0
@@ -5272,6 +5971,8 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
             current_task_id = ''
             current_model = None
             current_effort = None
+            pending_service_tier = 'default'
+            current_service_tier = 'default'
             current_cwd = ''
             files_rebuilt += 1
 
@@ -5319,7 +6020,7 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                     last_complete_offset = handle.tell()
                     if (b'session_meta' not in raw and b'task_started' not in raw and
                             b'task_complete' not in raw and b'turn_context' not in raw and
-                            b'response_item' not in raw):
+                            b'response_item' not in raw and b'thread_settings_applied' not in raw):
                         continue
                     try:
                         item = json.loads(raw.decode('utf-8', errors='ignore').strip())
@@ -5349,17 +6050,31 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                                 turn['cwd'] = current_cwd
                         continue
 
+                    if item_type == 'event_msg' and payload_type == 'thread_settings_applied':
+                        settings = payload.get('thread_settings')
+                        if isinstance(settings, dict):
+                            pending_service_tier = _codex_service_tier(settings.get('service_tier')) or pending_service_tier
+                        continue
+
                     if item_type == 'event_msg' and payload_type == 'task_started':
                         current_task_id = str(payload.get('turn_id') or '')
+                        current_service_tier = pending_service_tier
                         turn = ensure_turn(current_task_id, _codex_timestamp_iso(payload.get('started_at') or timestamp))
                         if turn and current_cwd and not turn.get('cwd'):
                             turn['cwd'] = current_cwd
+                        if turn:
+                            turn['service_tier'] = current_service_tier
                         continue
 
                     if item_type == 'turn_context' or payload_type == 'turn_context':
                         turn_id = str(payload.get('turn_id') or current_task_id or '')
+                        if turn_id and turn_id != current_task_id:
+                            current_service_tier = pending_service_tier
                         if turn_id:
                             current_task_id = turn_id
+                        context_tier = _codex_service_tier(payload.get('service_tier'))
+                        if context_tier:
+                            current_service_tier = context_tier
                         current_cwd = str(payload.get('cwd') or current_cwd or '')
                         raw_model = payload.get('model') or item.get('model')
                         raw_effort = (payload.get('effort') or payload.get('reasoning_effort') or
@@ -5371,10 +6086,13 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
                             turn['root_turn_id'] = str(payload.get('root_turn_id') or turn.get('root_turn_id') or '')
                             turn['cwd'] = current_cwd or turn.get('cwd') or ''
                             if current_model:
-                                compound, canon, effort, _ = normalize_codex_model_effort(current_model, current_effort)
+                                compound, canon, effort, _ = normalize_codex_model_effort(
+                                    current_model, current_effort, current_service_tier
+                                )
                                 turn['model_key'] = compound
                                 turn['model_id'] = canon
                                 turn['reasoning_effort'] = effort
+                                turn['service_tier'] = current_service_tier
                         continue
 
                     if item_type == 'event_msg' and payload_type == 'task_complete':
@@ -5478,11 +6196,14 @@ def scan_codex_mission_turns(sessions_dir=None, cache_file=None, now=None,
 
         cache_files[key] = {
             'mtime': mtime, 'size': size, 'offset': last_complete_offset,
+            'attribution_version': 3,
             'session_id': session_id or key,
             'thread_source': thread_source,
             'parent_thread_id': parent_thread_id,
             'current_task_id': current_task_id,
             'current_model': current_model, 'current_effort': current_effort,
+            'pending_service_tier': pending_service_tier,
+            'current_service_tier': current_service_tier,
             'current_cwd': current_cwd, 'turns': turns,
         }
         files_updated += 1
@@ -6381,7 +7102,8 @@ def _codex_finalize_mission(raw_mission, reviews):
 
 def _is_sol_high_baseline(model_key):
     clean = _codex_plain_text(model_key)
-    return '5.6 sol high' in clean and 'xhigh' not in clean and 'extra high' not in clean
+    return ('5.6 sol high' in clean and 'xhigh' not in clean and
+            'extra high' not in clean and '(fast)' not in clean)
 
 
 def _codex_mission_usable_for_matrix(mission):
@@ -8346,6 +9068,79 @@ def _attach_codex_delegated_turn(mission, turn):
     mission['model_totals'] = sorted(totals.values(), key=lambda item: -_safe_nonnegative_int(item.get('total_tokens')))
 
 
+def _codex_mission_active_minutes(mission):
+    """Observed wall-clock union of completed work turns, excluding user pauses."""
+    intervals = []
+    for turn in mission.get('turns') or []:
+        if not isinstance(turn, dict) or not turn.get('completed'):
+            continue
+        start = _parse_iso_utc(turn.get('started_at'))
+        end = _parse_iso_utc(turn.get('completed_at'))
+        if start is not None and end is not None and end > start:
+            intervals.append((start, end))
+    if not intervals:
+        return None
+    intervals.sort()
+    merged = []
+    for start, end in intervals:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return sum((end - start).total_seconds() for start, end in merged) / 60.0
+
+
+def build_codex_task_duration_timeline(missions, now=None, days=180,
+                                       windows=(7, 14, 30)):
+    """Rolling mean active minutes for accepted missions with measured turn times."""
+    now_utc = _parse_iso_utc(now) if not isinstance(now, datetime) else now
+    now_utc = (now_utc or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    days = max(1, int(days))
+    first_day = now_utc.date() - timedelta(days=days - 1)
+    daily = {}
+    missing_duration = 0
+    for mission in missions or []:
+        if not isinstance(mission, dict) or not mission.get('accepted'):
+            continue
+        end = _parse_iso_utc(mission.get('end_at'))
+        if end is None or not first_day <= end.date() <= now_utc.date():
+            continue
+        minutes = _codex_mission_active_minutes(mission)
+        if minutes is None:
+            missing_duration += 1
+            continue
+        daily.setdefault(end.date(), []).append({
+            'minutes': minutes,
+            'reviewed': bool(mission.get('outcome_reviewed')),
+        })
+    dates = [(first_day + timedelta(days=index)) for index in range(days)]
+    result = {}
+    for window in windows:
+        width = max(1, int(window))
+        points = []
+        for day in dates:
+            samples = [item for offset in range(width)
+                       for item in daily.get(day - timedelta(days=offset), [])]
+            values = [item['minutes'] for item in samples]
+            points.append({
+                'date': day.isoformat(),
+                'mean_minutes': round(statistics.mean(values), 2) if values else None,
+                'median_minutes': round(statistics.median(values), 2) if values else None,
+                'task_count': len(values),
+                'reviewed_count': sum(bool(item['reviewed']) for item in samples),
+            })
+        result[str(width)] = {'points': points}
+    return {
+        'available': bool(daily),
+        'source': 'Local Codex completed-turn timestamps',
+        'generated_at': now_utc.isoformat(),
+        'dates': [day.isoformat() for day in dates],
+        'windows': result,
+        'task_count': sum(len(items) for items in daily.values()),
+        'missing_duration_count': missing_duration,
+    }
+
+
 def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
                               quota_efficiency=None, quota_task_samples=None):
     now_utc = now if isinstance(now, datetime) else (_parse_iso_utc(now) if now else datetime.now(timezone.utc))
@@ -8699,6 +9494,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         '365': _codex_task_matrix(missions, 365, now_utc),
         'all': _codex_task_matrix(missions, None, now_utc),
     }
+    duration_timeline = build_codex_task_duration_timeline(missions, now_utc)
     accepted_count = sum(1 for mission in missions if mission.get('accepted'))
     abandoned_count = sum(
         1 for mission in missions
@@ -8731,6 +9527,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
         'repair_accounting': repair_accounting,
         'repair_capabilities': repair_capabilities,
         'matrices': matrices,
+        'duration_timeline': duration_timeline,
         'summary': {
             'mission_count': len(missions),
             'accepted_count': accepted_count,
@@ -8763,7 +9560,7 @@ def build_codex_task_outcomes(turn_scan, recent_events, reviews=None, now=None,
 def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                            max_files=500, max_dirs=1000, max_entries=20000,
                            max_line_bytes=10*1024*1024, max_file_size=500*1024*1024,
-                           max_total_bytes=2*1024*1024*1024):
+                           max_total_bytes=4*1024*1024*1024):
     """Scan local Codex session logs for per-model and per-effort usage with bounded incremental caching."""
     with CODEX_SCAN_LOCK:
         max_files = max(0, int(max_files))
@@ -8832,9 +9629,12 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
         history_retention_cutoff = now_utc - timedelta(days=367)
 
         cache_path = cache_file if cache_file is not None else globals().get('CODEX_MODELS_CACHE_FILE') or os.path.join(BASE_DIR, 'codex_models_cache.json')
-        cache_store = _read_json_file(cache_path, {'version': 4, 'files': {}})
-        if not isinstance(cache_store, dict) or cache_store.get('version') != 4 or not isinstance(cache_store.get('files'), dict):
-            cache_store = {'version': 4, 'files': {}}
+        cache_store = _read_json_file(cache_path, {'version': CODEX_MODELS_CACHE_VERSION, 'files': {}})
+        if (not isinstance(cache_store, dict) or cache_store.get('version') != CODEX_MODELS_CACHE_VERSION or
+                not isinstance(cache_store.get('files'), dict)):
+            cache_store = {'version': CODEX_MODELS_CACHE_VERSION, 'files': {}}
+        else:
+            cache_store['version'] = CODEX_MODELS_CACHE_VERSION
         cache_files = cache_store.setdefault('files', {})
         cache_migrated = False
         if default_scan:
@@ -8967,7 +9767,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                 cached_entry.get('mtime') == mtime and
                 cached_entry.get('size') == size and
                 cached_offset_valid and cached_offset == size and
-                cached_payload_valid and
+                cached_payload_valid and cached_entry.get('attribution_version') == 3 and
                 isinstance(cached_entry.get('fingerprint'), str) and cached_entry.get('fingerprint')):
                 files_cached += 1
                 continue
@@ -8975,6 +9775,8 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
             start_offset = 0
             current_model = None
             current_effort = None
+            pending_service_tier = 'default'
+            current_service_tier = 'default'
             current_task_id = None
             prev_cumulative = {}
             seen_request_ids = {}
@@ -8988,7 +9790,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
 
             if (cached_entry and isinstance(cached_entry, dict) and
                 cached_offset_valid and cached_offset > 0 and
-                cached_payload_valid and
+                cached_payload_valid and cached_entry.get('attribution_version') == 3 and
                 isinstance(cached_entry.get('fingerprint'), str) and cached_entry.get('fingerprint')):
                 prefix_hash = _compute_file_prefix_hash(file_path, cached_offset)
                 if prefix_hash and prefix_hash == cached_entry.get('fingerprint'):
@@ -8997,6 +9799,8 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                     start_offset = cached_offset
                     current_model = cached_entry.get('current_model')
                     current_effort = cached_entry.get('current_effort')
+                    pending_service_tier = cached_entry.get('pending_service_tier') or 'default'
+                    current_service_tier = cached_entry.get('current_service_tier') or pending_service_tier
                     prev_cumulative = dict(cached_entry.get('prev_cumulative') or {})
                     seen_request_ids = _load_seen_request_ids(cached_entry.get('seen_request_ids'))
                     last_turn_usage = _to_hashable(cached_entry.get('last_turn_usage'))
@@ -9088,6 +9892,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
 
                         # Fast prefilter before JSON decoding
                         if (b'turn_context' not in raw_line and
+                            b'thread_settings_applied' not in raw_line and
                             b'token_count' not in raw_line and
                             b'task_started' not in raw_line and
                             b'task_complete' not in raw_line and
@@ -9112,8 +9917,14 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                         item_type = item.get('type')
                         payload = item.get('payload') if isinstance(item.get('payload'), dict) else {}
                         payload_type = payload.get('type')
+                        if item_type == 'event_msg' and payload_type == 'thread_settings_applied':
+                            settings = payload.get('thread_settings')
+                            if isinstance(settings, dict):
+                                pending_service_tier = _codex_service_tier(settings.get('service_tier')) or pending_service_tier
+                            continue
                         if item_type == 'event_msg' and payload_type == 'task_started':
                             current_task_id = str(payload.get('turn_id') or '') or None
+                            current_service_tier = pending_service_tier
                         if item_type == 'event_msg' and payload_type == 'task_complete':
                             finished_turn_id = str(payload.get('turn_id') or '')
                             if finished_turn_id:
@@ -9123,6 +9934,13 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                         # Turn context update: Only turn_context records may update model & effort!
                         is_turn_ctx = (item_type == 'turn_context' or (item_type == 'event_msg' and payload_type == 'turn_context') or payload_type == 'turn_context')
                         if is_turn_ctx:
+                            context_turn_id = str(payload.get('turn_id') or '')
+                            if context_turn_id and context_turn_id != current_task_id:
+                                current_task_id = context_turn_id
+                                current_service_tier = pending_service_tier
+                            context_tier = _codex_service_tier(payload.get('service_tier'))
+                            if context_tier:
+                                current_service_tier = context_tier
                             raw_m = payload.get('model') if isinstance(payload, dict) else None
                             if not raw_m:
                                 raw_m = item.get('model')
@@ -9156,10 +9974,13 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                             is_tool_call = True
 
                         if is_tool_call:
-                            compound_key, canon_model, eff_val, eff_lbl = normalize_codex_model_effort(current_model, current_effort)
+                            compound_key, canon_model, eff_val, eff_lbl = normalize_codex_model_effort(
+                                current_model, current_effort, current_service_tier
+                            )
                             m_stat = all_time.setdefault(compound_key, {
                                 'model_id': canon_model,
                                 'reasoning_effort': eff_val,
+                                'service_tier': current_service_tier,
                                 'input_tokens': 0, 'cached_input_tokens': 0, 'cache_write_input_tokens': 0,
                                 'output_tokens': 0, 'thinking_tokens': 0, 'total_tokens': 0,
                                 'responses': 0, 'tool_calls': 0, 'last_updated': None
@@ -9285,7 +10106,9 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
 
                             ts_str = item.get('timestamp') or payload.get('timestamp')
                             ev_dt = _parse_iso_utc(ts_str)
-                            compound_key, canon_model, eff_val, eff_lbl = normalize_codex_model_effort(current_model, current_effort)
+                            compound_key, canon_model, eff_val, eff_lbl = normalize_codex_model_effort(
+                                current_model, current_effort, current_service_tier
+                            )
                             quota_observation = _extract_codex_5h_quota_observation(
                                 payload.get('rate_limits'),
                                 ts_str,
@@ -9294,6 +10117,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                                 cumulative_state,
                                 rel_path,
                                 current_task_id,
+                                current_service_tier,
                             )
                             if quota_observation is not None:
                                 quota_observations.append(quota_observation)
@@ -9303,6 +10127,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                                 m_stat = all_time.setdefault(compound_key, {
                                     'model_id': canon_model,
                                     'reasoning_effort': eff_val,
+                                    'service_tier': current_service_tier,
                                     'input_tokens': 0, 'cached_input_tokens': 0, 'cache_write_input_tokens': 0,
                                     'output_tokens': 0, 'thinking_tokens': 0, 'total_tokens': 0,
                                     'responses': 0, 'tool_calls': 0, 'last_updated': None
@@ -9323,6 +10148,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                                         'ts': ts_str,
                                         'task_id': str(current_task_id or ''),
                                         'model_key': compound_key,
+                                        'service_tier': current_service_tier,
                                         'in': in_toks,
                                         'cached_in': cached_in,
                                         'cache_write_in': cache_write_in,
@@ -9362,6 +10188,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                 'mtime': mtime,
                 'size': size,
                 'offset': last_complete_pos,
+                'attribution_version': 3,
                 'fingerprint': new_fingerprint,
                 'source_bucket': (
                     'archived' if os.path.basename(os.path.normpath(file_root)).lower() == 'archived_sessions'
@@ -9369,6 +10196,8 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                 ),
                 'current_model': current_model,
                 'current_effort': current_effort,
+                'pending_service_tier': pending_service_tier,
+                'current_service_tier': current_service_tier,
                 'prev_cumulative': prev_cumulative,
                 'seen_request_ids': _serialize_seen_request_ids(seen_request_ids),
                 'last_turn_usage': _to_json_safe(last_turn_usage),
@@ -9555,6 +10384,7 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
                 'model_id': m_stats['model_id'],
                 'model_name': m_key,
                 'reasoning_effort': m_stats['reasoning_effort'],
+                'service_tier': 'fast' if m_key.lower().endswith('(fast)') else 'default',
                 'source_kind': 'automatic',
                 'source_label': 'Automatic Codex logs',
                 'total_tokens': tot_toks,
@@ -9600,8 +10430,16 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
             'observed_at': now_utc.isoformat(),
         }
 
+        identity_snapshots = load_codex_quota_identity() if default_scan else []
+        all_quota_observations = attribute_codex_quota_observations(
+            all_quota_observations, identity_snapshots
+        )
+        quota_identity_events = build_codex_quota_identity_events(identity_snapshots)
         quota_efficiency = build_codex_quota_efficiency(all_quota_observations)
         quota_efficiency_timeline = build_codex_quota_efficiency_timeline(
+            all_quota_observations, now=now_utc
+        )
+        weekly_capacity_history = build_codex_weekly_capacity_history(
             all_quota_observations, now=now_utc
         )
         quota_per_task = build_codex_quota_per_task(
@@ -9649,6 +10487,9 @@ def scan_codex_model_usage(sessions_dir=None, cache_file=None, now=None,
             'quota_observations': all_quota_observations,
             'quota_efficiency': quota_efficiency,
             'quota_efficiency_timeline': quota_efficiency_timeline,
+            'weekly_capacity_history': weekly_capacity_history,
+            'quota_identity_events': quota_identity_events,
+            'quota_identity_snapshot_count': len(identity_snapshots),
             'quota_per_task': quota_per_task,
             'quota_per_task_timeline': quota_per_task_timeline,
             'task_outcomes': task_outcomes,
@@ -9812,16 +10653,24 @@ def build_models_breakdown(global_models_stats, conversations, codex_data=None, 
         wk_toks = m_stats.get('weekly_tokens', 0)
         weekly_pct_used = round((wk_toks / max(1, codex_weekly_limit)) * 100, 2) if codex_weekly_limit > 0 else None
 
-        auto_normalized_keys.add(normalize_model_lookup_name(m_name))
+        auto_normalized_keys.add(_codex_variant_lookup_name(m_name))
         auto_normalized_keys.add(m_name.lower())
 
         breakdown.append({
             'model_id': m_name,
             'canonical_model_id': m_stats.get('model_id', bm.get('model_id', m_name)),
             'reasoning_effort': m_stats.get('reasoning_effort', bm.get('reasoning_effort')),
+            'service_tier': m_stats.get('service_tier') or (
+                'fast' if m_name.lower().endswith('(fast)') else 'default'
+            ),
             'platform': 'Codex',
-            'provider': 'OpenAI (ChatGPT Web; GPT-5.6 Sol Thinking proxy)' if pricing_meta['pricing_estimated'] else bm.get('provider', 'OpenAI (Codex)'),
-            'badge': '~ GPT-5.6 Sol Thinking pricing proxy' if pricing_meta['pricing_estimated'] else bm.get('badge', ''),
+            'provider': ('OpenAI (ChatGPT Fast credits)' if pricing_meta['pricing_source'] == 'chatgpt_fast_credit_equivalent'
+                         else 'OpenAI (ChatGPT Web; GPT-5.6 Sol Thinking proxy)' if _is_chatgpt_web_model(m_name)
+                         else bm.get('provider', 'OpenAI (Codex)')),
+            'badge': (f"Fast · {pricing_meta['fast_credit_multiplier']:g}× Standard credits"
+                      if pricing_meta['pricing_source'] == 'chatgpt_fast_credit_equivalent'
+                      else '~ GPT-5.6 Sol Thinking pricing proxy' if _is_chatgpt_web_model(m_name)
+                      else bm.get('badge', '')),
             'source_kind': 'automatic',
             'source_label': 'Automatic Codex logs',
             'total_tokens': tot_toks,
@@ -9862,7 +10711,7 @@ def build_models_breakdown(global_models_stats, conversations, codex_data=None, 
     # 3) Manual Codex models (fallback for models not detected automatically)
     if codex_data and codex_data.get('models'):
         for m_name, m_stats in codex_data['models'].items():
-            norm_k = normalize_model_lookup_name(m_name)
+            norm_k = _codex_variant_lookup_name(m_name)
             if norm_k in auto_normalized_keys or m_name.lower() in auto_normalized_keys:
                 # Superseded by automatic entry!
                 continue
@@ -10710,6 +11559,62 @@ def _normalize_model_timeline_range(days=7, start_date=None, end_date=None, now_
     start_day = end_day - timedelta(days=days - 1)
     return start_day, end_day, days, 'rolling'
 
+MODEL_COLOR_PALETTE = (
+    '#c75a5a', '#19ff19', '#c619ff', '#47ffff', '#177ee6', '#ffc619',
+    '#90c75a', '#ff73dc', '#ff1919', '#c6ff19', '#19ff8c', '#38a3c7',
+    '#e6a667', '#9673ff', '#ff198c', '#ff8c19', '#67e6a6', '#e6174b',
+    '#41c714', '#c75a90', '#c714c7', '#e6e667', '#ff7547', '#e6e617',
+    '#96ff73', '#73b9ff', '#9ac714', '#ac5ac7', '#38c75b', '#c7a338',
+    '#ff19c6', '#ff7396', '#5ac7c7', '#ff9673', '#73dcff', '#c76d14',
+)
+
+# A fixed order keeps model identity stable when a date filter changes the
+# ranking or hides a model. New names use the deterministic fallback below.
+MODEL_COLOR_NAMES = (
+    '5.6 sol xhigh', '5.6 sol high', 'gpt-6-sol xhigh',
+    '5.6 luna xhigh', 'gpt-5.5 xhigh', 'chatgpt-web/high high',
+    'gpt-6-astra xhigh', 'gpt-6-astra low', '5.6 terra max',
+    '5.6 sol standard', 'gpt-5.5 high', 'gpt-5.5 low',
+    'gpt-6-astra high', 'gpt-6-astra max', 'gpt-6-astra standard',
+    '5.6 luna high', 'gpt-5.5', 'gpt-5.4',
+    'gpt-5.4 high', 'Gemini 3.7 Flash (High)',
+    'Gemini 3.8 Flash (High)', 'Gemini 3.5 Flash (High)',
+    'codex-auto-review low', 'chatgpt-web/think low',
+    'Gemini 3.5 Flash (Medium)', 'chatgpt-web/medium',
+    'Claude Opus 4.6 (Thinking)', 'gpt-reserve max',
+    'Gemini 3.6 Flash (High)', 'gpt-6-luna xhigh',
+    'gpt-6-luna high', 'gpt-6-sol high',
+    'gpt-6-luna standard', 'gpt-6-sol standard',
+    'gpt-6-sol low', 'gpt-6-luna low',
+)
+MODEL_COLOR_BY_NAME = {
+    name.casefold(): MODEL_COLOR_PALETTE[index]
+    for index, name in enumerate(MODEL_COLOR_NAMES)
+}
+# Keep the actively used Sol Max visibly distinct from Luna Xhigh's cyan.
+MODEL_COLOR_BY_NAME['gpt-6-sol max'] = '#ff8c42'
+
+
+def get_model_color(name):
+    """Return a stable, model-specific color across token and quota charts."""
+    key = str(name or '').strip().casefold()
+    if key.endswith('(fast)'):
+        base_color = get_model_color(key[:-len('(fast)')].strip())
+        base_rgb = tuple(int(base_color[index:index + 2], 16) / 255 for index in (1, 3, 5))
+        hue, _, saturation = colorsys.rgb_to_hls(*base_rgb)
+        fast_rgb = colorsys.hls_to_rgb((hue + 0.16) % 1.0, 0.62, max(0.78, saturation))
+        return '#' + ''.join(f'{round(channel * 255):02x}' for channel in fast_rgb)
+    known = MODEL_COLOR_BY_NAME.get(key)
+    if known:
+        return known
+    digest = hashlib.sha256(key.encode('utf-8')).digest()
+    hue = int.from_bytes(digest[:2], 'big') % 360
+    saturation = 72 + digest[2] % 17
+    lightness = 55 + digest[3] % 13
+    rgb = colorsys.hls_to_rgb(hue / 360, lightness / 100, saturation / 100)
+    return '#' + ''.join(f'{round(channel * 255):02x}' for channel in rgb)
+
+
 def build_models_daily_timeline(all_step_events, global_models_stats, codex_data=None, days=7, start_date=None, end_date=None):
     """Construct multi-model daily token/cost timeline for a rolling or custom date range."""
     now_local = datetime.now().astimezone()
@@ -10728,7 +11633,7 @@ def build_models_daily_timeline(all_step_events, global_models_stats, codex_data
         date_keys.append(day_value.isoformat())
     date_index = {date_key: idx for idx, date_key in enumerate(date_keys)}
 
-    # Group step tokens and API-equivalent estimated cost by model/day.
+    # Group step tokens and estimated cost equivalents by model/day.
     # Unknown-price usage is tracked explicitly so it is never presented as a true $0 cost.
     model_daily_map = {}
     model_daily_cost_map = {}
@@ -10805,19 +11710,6 @@ def build_models_daily_timeline(all_step_events, global_models_stats, codex_data
                     else:
                         model_daily_unknown_cost_tokens[m_name][-1] = m_stat['today_tokens']
 
-    PALETTE = [
-        '#06b6d4', # Cyan neon
-        '#f59e0b', # Amber gold
-        '#6366f1', # Indigo
-        '#f97316', # Orange fire
-        '#a855f7', # Purple
-        '#10b981', # Emerald
-        '#38bdf8', # Sky blue
-        '#ec4899', # Pink
-        '#84cc16', # Lime
-        '#14b8a6', # Teal
-    ]
-
     sorted_models = sorted(
         model_daily_map.items(),
         key=lambda item: sum(item[1]),
@@ -10825,26 +11717,14 @@ def build_models_daily_timeline(all_step_events, global_models_stats, codex_data
     )
 
     models_result = []
-    for idx, (m_name, daily_arr) in enumerate(sorted_models):
-        color = PALETTE[idx % len(PALETTE)]
-        name_lower = m_name.lower()
-        if '3.8' in m_name: color = '#06b6d4'
-        elif '3.7' in m_name: color = '#6366f1'
-        elif 'opus' in name_lower: color = '#a855f7'
-        elif 'sol' in name_lower and 'xhigh' in name_lower: color = '#f97316'
-        elif 'sol' in name_lower: color = '#f59e0b'
-        elif 'luna' in name_lower: color = '#38bdf8'
-        elif 'terra' in name_lower: color = '#84cc16'
-        elif 'gpt-5.5' in name_lower: color = '#10b981'
-        elif 'chatgpt-web' in name_lower: color = '#ec4899'
-
+    for m_name, daily_arr in sorted_models:
         daily_cost_arr = model_daily_cost_map.get(m_name, [0.0] * days)
         daily_unknown_arr = model_daily_unknown_cost_tokens.get(m_name, [0] * days)
         unknown_cost_tokens = sum(daily_unknown_arr)
         pricing_meta = get_pricing_provenance(m_name)
         models_result.append({
             'name': m_name,
-            'color': color,
+            'color': get_model_color(m_name),
             'daily_tokens': daily_arr,
             'total_period_tokens': sum(daily_arr),
             'today_tokens': daily_arr[-1] if end_day == today_local and daily_arr else 0,
@@ -11635,6 +12515,11 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         codex_auto_models['quota_efficiency_timeline'] = build_codex_quota_efficiency_timeline(
             codex_auto_models.get('quota_observations') or []
         )
+    if 'weekly_capacity_history' not in codex_auto_models:
+        codex_auto_models = dict(codex_auto_models)
+        codex_auto_models['weekly_capacity_history'] = build_codex_weekly_capacity_history(
+            codex_auto_models.get('quota_observations') or []
+        )
     codex_db['automatic_model_usage'] = codex_auto_models
 
     automatic_model_rows = codex_auto_models.get('models') or {}
@@ -11647,6 +12532,11 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         key for key in list(global_models_stats.keys()) + automatic_model_keys
         if isinstance(key, str) and key.strip()
     }
+
+    # The Codex client refreshes its picker cache independently of this server.
+    # Re-read it for each dashboard build so new choices appear without a code release.
+    refresh_codex_runtime_models()
+    aa_sync_status = prepare_aa_benchmarks()
 
     # Leaderboard calculation
     leaderboard = []
@@ -11663,6 +12553,7 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
 
     for m_key in all_model_keys:
         bm = get_benchmark_for_model(m_key)
+        is_fast_variant = m_key.lower().endswith('(fast)')
         emp = global_models_stats.get(m_key, {
             'model_name': m_key,
             'sessions_count': 0,
@@ -11680,36 +12571,53 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
             'duration_minutes': 0.0,
         })
 
-        aa_metrics = get_verified_aa_metrics(bm)
+        # Artificial Analysis has no separate measurement for the Fast service
+        # tier. Keep its local usage visible without inventing an AA ranking.
+        aa_metrics = (get_verified_aa_metrics(bm) if not is_fast_variant else
+                      {metric: None for metric in AA_LEADERBOARD_METRICS})
         effective_pricing = get_effective_pricing(m_key) or {}
         intelligence_index = aa_metrics['intelligence_index']
         cost_per_task = aa_metrics['cost_per_task']
-        val_score = (
-            round(intelligence_index / max(0.05, cost_per_task), 1)
-            if intelligence_index is not None and cost_per_task is not None
-            else None
-        )
+        val_score = aa_value_score(intelligence_index, cost_per_task)
         avg_tokens_turn = round(emp['output_tokens'] / max(1, emp['model_responses']), 0)
         avg_tools_turn = round(emp['tool_calls'] / max(1, emp['model_responses']), 1)
         thinking_pct = round((emp['thinking_tokens'] / max(1, emp['output_tokens'])) * 100, 1) if emp['output_tokens'] > 0 else 0
 
         leaderboard.append({
             'model_name': m_key,
-            'display_name': bm.get('display_name') or m_key,
+            'display_name': ((bm.get('display_name') or m_key) + ' (fast)'
+                             if is_fast_variant else bm.get('display_name') or m_key),
             'provider': bm.get('provider', 'Custom'),
             'intelligence_index': intelligence_index,
             'coding_score': aa_metrics['coding_score'],
             'reasoning_score': aa_metrics['reasoning_score'],
             'speed_tps': aa_metrics['speed_tps'],
             'ttft_sec': aa_metrics['ttft_sec'],
-            'price_in_1m': (bm.get('price_in_1m') if bm.get('price_in_1m') is not None
+            'price_in_1m': (effective_pricing.get('price_in_1m') if is_fast_variant
+                            else bm.get('price_in_1m') if bm.get('price_in_1m') is not None
                             else effective_pricing.get('price_in_1m')),
             'price_cached_in_1m': (
-                bm.get('price_cached_in_1m') if bm.get('price_cached_in_1m') is not None
+                effective_pricing.get('price_cached_in_1m') if is_fast_variant
+                else bm.get('price_cached_in_1m') if bm.get('price_cached_in_1m') is not None
                 else effective_pricing.get('price_cached_in_1m')
             ),
-            'price_out_1m': (bm.get('price_out_1m') if bm.get('price_out_1m') is not None
+            'price_out_1m': (effective_pricing.get('price_out_1m') if is_fast_variant
+                             else bm.get('price_out_1m') if bm.get('price_out_1m') is not None
                              else effective_pricing.get('price_out_1m')),
+            'codex_credit_in_1m': (float(bm['codex_credit_in_1m']) * _codex_fast_credit_multiplier(m_key)
+                                   if is_fast_variant and bm.get('codex_credit_in_1m') is not None
+                                   else bm.get('codex_credit_in_1m')),
+            'codex_credit_cached_in_1m': (
+                float(bm['codex_credit_cached_in_1m']) * _codex_fast_credit_multiplier(m_key)
+                if is_fast_variant and bm.get('codex_credit_cached_in_1m') is not None
+                else bm.get('codex_credit_cached_in_1m')
+            ),
+            'codex_credit_out_1m': (float(bm['codex_credit_out_1m']) * _codex_fast_credit_multiplier(m_key)
+                                    if is_fast_variant and bm.get('codex_credit_out_1m') is not None
+                                    else bm.get('codex_credit_out_1m')),
+            'codex_credit_rate_source_url': bm.get('codex_credit_rate_source_url'),
+            'codex_credit_rate_as_of': bm.get('codex_credit_rate_as_of'),
+            'codex_credit_rate_speed': bm.get('codex_credit_rate_speed'),
             'pricing_estimated': bool(effective_pricing.get('pricing_estimated')),
             'pricing_basis_model': effective_pricing.get('pricing_basis_model'),
             'cost_per_task': cost_per_task,
@@ -11718,12 +12626,13 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
             'max_output_tokens': bm.get('max_output_tokens'),
             'model_id': bm.get('model_id'),
             'reasoning_effort': bm.get('reasoning_effort'),
-            'benchmark_source': bm.get('benchmark_source'),
+            'benchmark_source': 'fast_variant_unmeasured' if is_fast_variant else bm.get('benchmark_source'),
             'benchmark_source_url': bm.get('benchmark_source_url'),
             'benchmark_as_of': bm.get('benchmark_as_of'),
             'benchmark_index_version': bm.get('benchmark_index_version'),
             'benchmark_status': bm.get('benchmark_status'),
-            'benchmark_note': bm.get('benchmark_note'),
+            'benchmark_note': ('Fast has no separate Artificial Analysis result; local quota usage is measured.'
+                               if is_fast_variant else bm.get('benchmark_note')),
             'family': bm.get('family'),
             'recommended': bool(bm.get('recommended')),
             'recommendation_order': bm.get('recommendation_order'),
@@ -11780,6 +12689,7 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         'tool_usage_global': {},
         'models_distribution': {},
         'leaderboard': leaderboard,
+        'aa_sync': aa_sync_status,
         'quotas': quotas_data,
         'accounts_manager': accounts_db,
         'current_account': active_acc,
@@ -11801,6 +12711,24 @@ def analyze_all_conversations(sources=None, model_timeline_days=7,
         'source_breakdowns': source_breakdowns,
         'sources': source_breakdowns,
         'generated_at': datetime.now().isoformat()
+    }
+
+    color_names = {name for name in global_models_stats if isinstance(name, str) and name}
+    color_names.update(name for name in automatic_model_keys if isinstance(name, str) and name)
+    color_names.update(model['name'] for model in summary['models_daily_timeline']['models'])
+    color_names.update(
+        row['model_name'] for row in leaderboard
+        if isinstance(row.get('model_name'), str) and row['model_name']
+    )
+    for timeline_key in ('quota_efficiency_timeline', 'quota_per_task_timeline'):
+        timeline = codex_auto_models.get(timeline_key) or {}
+        for window in (timeline.get('windows') or {}).values():
+            color_names.update(
+                row['model_key'] for row in window.get('models', [])
+                if isinstance(row, dict) and isinstance(row.get('model_key'), str)
+            )
+    summary['model_colors'] = {
+        name: get_model_color(name) for name in sorted(color_names)
     }
 
     for c in conversations:
@@ -12560,6 +13488,10 @@ class TrackerHTTPHandler(http.server.SimpleHTTPRequestHandler):
                     model_timeline_start=timeline_start,
                     model_timeline_end=timeline_end,
                 )
+                try:
+                    _write_live_static_snapshot_once(data)
+                except OSError:
+                    pass  # The live API still works if the optional file export fails.
             except (TypeError, ValueError) as exc:
                 response_bytes = json.dumps(
                     {'status': 'error', 'message': str(exc)},
@@ -12649,16 +13581,14 @@ def run_server():
 
     with socketserver.ThreadingTCPServer(server_address, TrackerHTTPHandler) as httpd:
         print("==================================================")
-        print("[OK] AGY Live Usage & Quota Server is running (Multi-threaded)!")
+        print("[OK] Usage Tracker server is running (Multi-threaded)!")
         print(f"[URL] Open in browser: http://localhost:{PORT}")
         print(f"[API] Live endpoint: http://localhost:{PORT}/api/data")
         print("==================================================")
 
-        try:
-            initial_data = analyze_all_conversations()
-            _write_data_js(initial_data)
-        except Exception: pass
-
+        # Serve immediately. The live page requests /api/data on load; a full
+        # startup scan can exceed the launcher's readiness timeout and make it
+        # kill an otherwise healthy server before it accepts any connections.
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

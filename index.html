@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AGY Live Usage Tracker — Theo Dõi & Phân Tích Chi Tiết</title>
-    <meta name="description" content="Dashboard phân tích lượng usage, tokens, chi phí và tool calls trong Antigravity IDE theo thời gian thực">
+    <title>Usage Tracker — Theo dõi Codex và Gemini</title>
+    <meta name="description" content="Dashboard cục bộ phân tích usage, token, hạn mức, chi phí và nhiệm vụ của Codex và Gemini/Antigravity">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=20260921-local-sync-2">
+    <link rel="stylesheet" href="style.css?v=20260925-dashboard-2">
 </head>
 <body>
     <div class="app-container">
@@ -41,12 +41,12 @@
                     </div>
                     <div>
                         <div class="title-row">
-                            <h1>AGY Usage Tracker</h1>
+                            <h1>Usage Tracker</h1>
                             <span class="badge-live" id="live-badge">
                                 <span class="badge-dot"></span> <span id="sync-mode-label">LIVE SYNC</span>
                             </span>
                         </div>
-                        <p class="subtitle">Giám sát & phân tích mức độ tiêu tốn Token, Chi phí & Tool Calls trong IDE</p>
+                        <p class="subtitle">Theo dõi token, hạn mức, chi phí và nhiệm vụ của Codex &amp; Gemini</p>
                     </div>
                 </div>
             </div>
@@ -695,6 +695,27 @@
                 <div class="quota-cards-grid" id="codex-rate-limit-cards">
                     <!-- Populated dynamically by JS -->
                 </div>
+                <div class="chart-card" style="padding:20px;margin-top:16px;">
+                    <div class="chart-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                        <div>
+                            <h3>Trần Hạn Mức Codex Tuần Tương Đương Theo USD</h3>
+                            <p style="font-size:0.78rem;color:var(--text-muted);margin-top:4px;max-width:770px;">Mỗi điểm là một lần suy luận từ chi phí quy đổi ước tính chia cho % hạn mức tuần đã tiêu hao. Standard theo giá API, Fast theo hệ số credit ChatGPT. Đường gần đây dùng cửa sổ thời gian để nhận ra thay đổi mới; đường hội tụ dùng toàn bộ điểm đo được giữ lại.</p>
+                        </div>
+                        <div class="quota-timeline-controls">
+                            <label for="codex-weekly-capacity-account">Tài khoản Codex</label>
+                            <select id="codex-weekly-capacity-account" aria-label="Tài khoản Codex để đo trần tuần"></select>
+                            <label for="codex-weekly-capacity-window">Cửa sổ gần đây</label>
+                            <select id="codex-weekly-capacity-window" aria-label="Cửa sổ thời gian ước tính gần đây"><option value="7">7 ngày</option><option value="14">14 ngày</option><option value="30">30 ngày</option></select>
+                            <label for="codex-weekly-capacity-range">Khoảng</label>
+                            <select id="codex-weekly-capacity-range" aria-label="Khoảng thời gian trần tuần tương đương"><option value="30">30 ngày</option><option value="90">90 ngày</option><option value="180">180 ngày</option><option value="365">365 ngày</option></select>
+                        </div>
+                    </div>
+                    <div id="codex-weekly-capacity-status" style="font-size:0.8rem;color:var(--text-muted);margin-top:8px;">Đang đọc lịch sử Codex…</div>
+                    <div style="height:280px;margin-top:12px;"><canvas id="canvas-codex-weekly-capacity"></canvas></div>
+                    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:0.76rem;color:var(--text-muted);"><span><b style="color:var(--amber-400);">●</b> Phép đo riêng lẻ</span><span><b style="color:var(--cyan-400);">━</b> Trung vị gần đây</span><span><b style="color:var(--purple-400);">┄</b> Trung vị hội tụ</span></div>
+                    <div id="codex-weekly-capacity-note" style="font-size:0.76rem;color:var(--text-muted);margin-top:10px;">USD là chi phí quy đổi ước tính, không phải hạn mức chính thức hay credit của tài khoản. Fast dùng hệ số credit ChatGPT theo tài liệu OpenAI. Phép đo có thể lệch khi nhiều phiên hoạt động đồng thời hoặc cơ cấu model thay đổi.</div>
+                    <div id="codex-weekly-capacity-events" style="font-size:0.76rem;color:var(--text-muted);margin-top:8px;"></div>
+                </div>
             </section>
 
             <!-- Quota History, Capacity & Policy Shift Section -->
@@ -909,13 +930,14 @@
             <!-- Leaderboard Header Banner -->
             <section class="leaderboard-hero">
                 <div class="hero-tag">
-                    <span>⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v4.3.2 • CẬP NHẬT 21/09/2026</span>
+                    <span id="aa-hero-tag">⚡ ARTIFICIAL ANALYSIS INTELLIGENCE INDEX v4.3.2</span>
                 </div>
                 <h2>Bảng Xếp Hạng Models — Chọn Model Theo Việc Cần Làm</h2>
                 <p>
-                    Điểm trí tuệ, tốc độ và chi phí/task lấy từ <strong>Artificial Analysis v4.3.2</strong>; nhãn “ước tính” được giữ nguyên khi AA chưa hoàn tất đo độc lập.
+                    Điểm trí tuệ, tốc độ và chi phí/task lấy từ <a href="https://artificialanalysis.ai/" target="_blank" rel="noopener"><strong id="aa-index-label">Artificial Analysis v4.3.2</strong></a>; nhãn “ước tính” được giữ nguyên khi AA chưa hoàn tất đo độc lập.
                     Bảng vẫn hiển thị model có thể chọn trong Codex hoặc đã dùng cục bộ khi AA chưa công bố điểm, đồng thời ghép <strong>token, chi phí all-time và quota/task từ log cục bộ</strong>.
                 </p>
+                <p id="aa-sync-status" class="aa-sync-status" aria-live="polite"></p>
             </section>
 
             <!-- Leaderboard Top Highlights -->
@@ -930,14 +952,14 @@
                 <div class="section-header">
                     <h2 class="section-title">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10"></path><path d="M18 20V4"></path><path d="M6 20v-4"></path></svg>
-                        So Sánh Intelligence Index v4.3.2 Và Tốc Độ Output
+                        <span id="aa-comparison-title">So Sánh Intelligence Index v4.3.2 Và Tốc Độ Output</span>
                     </h2>
                 </div>
 
                 <div class="charts-row">
                     <div class="chart-card">
                         <div class="chart-header">
-                            <h3>Intelligence Index v4.3.2</h3>
+                            <h3 id="aa-iq-chart-title">Intelligence Index v4.3.2</h3>
                             <span class="chart-badge">Higher is better</span>
                         </div>
                         <canvas id="leaderboard-iq-chart"></canvas>
@@ -960,13 +982,13 @@
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M10 14.66V17c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-2.34"></path><path d="M18 17c0 .55-.45 1-1 1h-2c-.55 0-1-.45-1-1v-2.34"></path><path d="M6 2h12v7a6 6 0 0 1-12 0V2Z"></path></svg>
                             Bảng Quyết Định Model
                         </h2>
-                        <p class="section-desc">Mặc định hiện đầy đủ các model và mức reasoning đang có trong bộ chọn Codex. Dòng chưa được Artificial Analysis chấm vẫn xuất hiện nhưng không có hạng.</p>
+                        <p class="section-desc">Hiện các model trong bộ chọn Codex và model mới đã thấy trong log. Model chưa được Artificial Analysis chấm vẫn xuất hiện nhưng không có hạng. Giá API và credit Codex dùng hai bảng giá riêng.</p>
                     </div>
 
                     <div class="table-actions leaderboard-controls">
                         <span id="leaderboard-result-count" class="leaderboard-result-count">0 biến thể</span>
                         <select id="leaderboard-scope-select" class="select-styled" aria-label="Phạm vi model">
-                            <option value="selectable">Phạm vi: Có thể chọn trong Codex</option>
+                            <option value="selectable">Phạm vi: Có thể chọn / đã quan sát</option>
                             <option value="recommended">Phạm vi: Khuyến nghị</option>
                             <option value="current">Phạm vi: Thế hệ hiện tại</option>
                             <option value="local">Phạm vi: Đã dùng cục bộ</option>
@@ -978,6 +1000,7 @@
                             <option value="Sol">Sol</option>
                             <option value="Terra">Terra</option>
                             <option value="Luna">Luna</option>
+                            <option value="ChatGPT Web">ChatGPT Web</option>
                             <option value="Gemini 3.8">Gemini 3.8</option>
                             <option value="Gemini 3.7">Gemini 3.7</option>
                             <option value="Gemini 3.6">Gemini 3.6</option>
@@ -1005,7 +1028,7 @@
                                 <th class="num">Intelligence v4.3.2</th>
                                 <th class="num">Tốc độ</th>
                                 <th class="num">AA cost/task & IQ/$</th>
-                                <th class="num">API $/1M In · Cache · Out</th>
+                                <th class="num">API $ / Codex credit mỗi 1M In · Cache · Out</th>
                                 <th class="num">Quota cục bộ</th>
                                 <th class="num">All-time cục bộ</th>
                                 <th>Quyết định sử dụng</th>
@@ -1163,7 +1186,7 @@
                                 Biểu Đồ Xu Hướng Chi Phí Theo Model <span id="model-cost-range-label" style="color:var(--text-muted,#94a3b8);font-weight:500;">(7 Ngày Qua)</span>
                             </h3>
                             <p style="font-size: 0.82rem; color: var(--text-muted, #888); margin: 4px 0 0 0;">
-                                Cột chồng thể hiện chi phí API ước tính và dùng cùng khoảng thời gian cùng đơn vị Ngày / Tháng / Năm với biểu đồ tokens phía trên.
+                                Cột chồng thể hiện chi phí quy đổi ước tính: Standard theo giá API, Fast theo hệ số credit ChatGPT. Biểu đồ dùng cùng khoảng thời gian và đơn vị Ngày / Tháng / Năm với biểu đồ tokens phía trên.
                             </p>
                             <p id="model-cost-coverage" style="font-size: 0.76rem; color: #86efac; margin: 4px 0 0 0;"></p>
                         </div>
@@ -1176,7 +1199,7 @@
                         </div>
                     </div>
                     <div style="font-size:0.75rem;color:var(--text-muted,#94a3b8);margin-bottom:0.7rem;">
-                        Credit chuẩn hóa là đơn vị nội bộ cố định: <strong style="color:#cbd5e1;">1 credit = $0.01 chi phí API ước tính</strong>. Đây không phải credit thanh toán chính thức của OpenAI.
+                        Credit chuẩn hóa là đơn vị nội bộ cố định: <strong style="color:#cbd5e1;">1 credit = $0.01 chi phí quy đổi ước tính</strong>. Đây không phải credit thanh toán chính thức của OpenAI.
                     </div>
                     <div id="models-daily-cost-chart-legend" style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 0.7rem;">
                         <!-- Dynamic Model Cost Legend items rendered by app.js -->
@@ -1403,6 +1426,36 @@
             <section class="summary-section">
                 <div class="summary-grid task-outcome-summary-grid" id="task-outcome-summary-grid">
                     <div class="summary-card"><div class="summary-card-label">Đang lập chỉ mục</div><div class="summary-card-value">—</div></div>
+                </div>
+            </section>
+
+            <section class="section task-outcome-section">
+                <div class="card quota-timeline-card">
+                    <div class="quota-timeline-header">
+                        <div>
+                            <h3>Thời Gian Trung Bình Hoàn Thành Nhiệm Vụ</h3>
+                            <p>Đường trung bình trượt của thời gian xử lý thực đo từ các lượt Codex đã hoàn tất. Các khoảng chờ giữa những lần bạn quay lại sửa không được cộng vào thời gian xử lý.</p>
+                        </div>
+                        <div class="quota-timeline-controls">
+                            <label for="task-duration-range">Phạm vi</label>
+                            <select id="task-duration-range" aria-label="Phạm vi biểu đồ thời gian nhiệm vụ">
+                                <option value="30">30 ngày</option>
+                                <option value="90" selected>90 ngày</option>
+                                <option value="180">180 ngày</option>
+                            </select>
+                            <label for="task-duration-window">Cửa sổ</label>
+                            <select id="task-duration-window" aria-label="Cửa sổ trung bình trượt thời gian nhiệm vụ">
+                                <option value="7">7 ngày · nhạy</option>
+                                <option value="14" selected>14 ngày · cân bằng</option>
+                                <option value="30">30 ngày · ổn định</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="task-duration-status" class="quota-timeline-status"></div>
+                    <div class="quota-timeline-canvas-wrap">
+                        <canvas id="canvas-task-duration" role="img" aria-label="Xu hướng thời gian xử lý trung bình của nhiệm vụ Codex đã hoàn tất"></canvas>
+                    </div>
+                    <div class="task-duration-details" id="task-duration-details"></div>
                 </div>
             </section>
 
@@ -1830,7 +1883,7 @@
         <!-- Footer -->
         <footer class="footer">
             <div class="footer-content">
-                <p><strong>AGY Live Usage Tracker</strong> • Giám sát mức tiêu tốn tài nguyên cho Google Antigravity IDE</p>
+                <p><strong>Usage Tracker</strong> • Theo dõi Codex và Gemini/Antigravity trên máy của bạn</p>
                 <p class="footer-note">Hệ số quy đổi ước lượng: ~3 ký tự/token cho nội dung song ngữ Việt/Anh + mã nguồn</p>
             </div>
         </footer>
@@ -1838,7 +1891,7 @@
 
     <!-- Fallback data for offline/file-protocol mode -->
     <script src="data.js"></script>
-    <script src="i18n.js?v=20260921-task-outcomes-en-4"></script>
-    <script src="app.js?v=20260921-local-sync-1"></script>
+    <script src="i18n.js?v=20260925-dashboard-2"></script>
+    <script src="app.js?v=20260925-dashboard-2"></script>
 </body>
 </html>

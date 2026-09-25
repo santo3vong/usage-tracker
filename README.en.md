@@ -6,7 +6,11 @@
 
 This dashboard tracks practical metrics for managing your AI quota.
 
-> The snapshots below are live captures from Usage Tracker during actual workflows. A few legacy demo images are retained for basic UI illustration.
+> These are real Usage Tracker captures from September 25, 2026. Values vary by account, model, and measurement time. USD figures are estimated cost equivalents, not Codex invoices.
+
+## Automatic Model Leaderboard Updates
+
+With an API key, the leaderboard checks the [Artificial Analysis Data API](https://artificialanalysis.ai/data-api/docs) when dashboard data loads and its last snapshot is over 24 hours old. It retains the last valid snapshot for offline use. Set `ARTIFICIAL_ANALYSIS_API_KEY` for the server process, or put the key on one line in `C:\Users\<username>\.codex\usage-tracker-aa-api-key.txt`, outside the served web directory. The snapshot is Git-ignored; the key is never sent to the browser. Restart the server and reload the page after adding a key. Without one, the dashboard shows the latest dated, verified offline snapshot. Codex picker models without an AA score stay visible but unranked. API and Codex prices remain separate from AA benchmarks.
 
 ## What Makes Usage Tracker Different
 
@@ -26,7 +30,25 @@ To address these measurement needs, Usage Tracker answers concrete operational q
 * When routing through orchestrators, executors, or subagents, which route is billed for the usage?
 * Unrecorded cost or usage fields remain `unknown` rather than defaulting to `0`, preventing skewed statistics.
 
-![Quota capacity evolution from real Usage Tracker capture](docs/screenshots/quota-capacity-evolution.png)
+## Charts from Real Usage
+
+**Codex weekly capacity.** Each dot infers a full-week cost-equivalent budget from estimated spend and the percentage of weekly quota used. The recent line responds to new changes, while the convergence line summarizes retained measurements. Account, range, and window controls help keep accounts separate.
+
+![Inferred Codex weekly quota capacity](docs/screenshots/codex-weekly-capacity-2026-09-25.png)
+
+**Five-hour quota efficiency over time.** Each model is compared with Sol High for the same raw token count. The table shows sample counts, confidence, and whether the baseline is direct or bridged. A value above 1× means faster quota consumption, not higher model quality.
+
+![Codex five-hour quota efficiency trend](docs/screenshots/quota-efficiency-trend-2026-09-25.png)
+
+**Quota cost per task.** This chart compares recently completed tasks with Sol High in the same time window and displays models only after both sides have enough samples. It measures the cost of finishing a task, unlike the per-token burn-rate chart above.
+
+![Quota consumption per task over time](docs/screenshots/task-quota-trend-2026-09-25.png)
+
+**Tokens and estimated cost by model.** The two stacked-bar charts share the date range and day/month/year grouping. Hover over a bar to see every model in that period. USD values are estimates; Fast variants use the ChatGPT credit multiplier in the equivalent-cost calculation.
+
+![Model token and estimated-cost trends](docs/screenshots/token-cost-trend-2026-09-25.png)
+
+The new **Average Task Completion Time** line chart tracks measured active time from completed Codex turns. It offers 30/90/180-day ranges and 7/14/30-day rolling means. Waiting between later corrections is excluded; tasks without completion timestamps are never treated as zero-minute tasks.
 
 ## Features: Instantaneous vs. Average Usage
 
@@ -36,9 +58,6 @@ The tracker avoids relying on a single total token column, as an isolated number
 * **Average usage (average / typical):** Serves as a baseline for comparable task categories. To filter out anomalies and outliers, the tracker prioritizes median values once sufficient samples are collected.
 
 Combining both metrics provides early warnings when a task exhibits abnormal burn rates while maintaining an empirical baseline to guide model selection.
-
-<img width="1713" height="945" alt="Model breakdown and real usage cost view" src="https://github.com/user-attachments/assets/f67f5a77-b901-47f4-801f-64a821f8d293" />
-<img width="1727" height="651" alt="Ảnh chụp màn hình 2026-09-17 082853" src="https://github.com/user-attachments/assets/bd49dc91-efb4-45a3-bc1f-576a50851432" />
 
 ## Task-to-Quota Correlation Matrix
 
@@ -109,6 +128,10 @@ The tracker has evolved across several layers:
 A common real-world issue occurred when the desktop process failed to resolve the `codex` executable via `PATH`. The tracker continued running by quietly falling back to session logs, displaying numbers that appeared valid but were stale.
 
 The project adheres to a strict principle: **the live app-server is authoritative when reachable; fallback data remains useful but must be explicitly labeled**.
+
+The Codex quota page includes a **Weekly API-Equivalent Capacity in USD** chart. Each point converts the API-equivalent token cost of one same-session, same-model/effort interval into a full-week estimate using the measured weekly quota percentage change. A cumulative median shows convergence across retained history, while a 7-, 14-, or 30-day median reflects recent measurements. The horizontal axis follows measurement order with date markers. This is an inference at current catalog API prices, not an official USD or credit allowance; concurrent activity, model mix, and price changes can affect it.
+
+For new measurements, the tracker stores the opaque Codex account UUID and live quota snapshots in `~/.codex/usage-tracker-quota-identity.json`, outside the web-served directory. A token log receives an account ID only when it is close to a live snapshot and both 5-hour and weekly reset times agree. Older logs without sufficient evidence stay in a separate unattributed-history group. The account selector keeps medians separate. An observed ID change is an account switch; an early weekly cycle change remains an unverified reset until provider evidence establishes its cause.
 
 ## Local Tokens Don’t Always Come from the Same Source
 
@@ -194,7 +217,7 @@ The following files are intentionally excluded by `.gitignore`:
 
 They may contain account identifiers, prompts, local paths, usage history, or other machine-local data. **Do not use `git add -f` to place these files in a public commit without reviewing their contents.**
 
-The public repository does not require private projects, personal prompt history, or private trading data. Images under `docs/screenshots/` use synthetic tasks and values to demonstrate the interface.
+The public repository does not require private projects, personal prompt history, or private trading data. The four `2026-09-25` screenshots are real captures supplied by the repository owner; older demo assets use illustrative values. Avoid including private prompts or full account identifiers in future public screenshots.
 
 ## Development and Validation
 
